@@ -1,6 +1,6 @@
 # p2poolmail
 
-Email alerts and status reports for P2Pool Monero mining.
+Email alerts and status reports for [P2Pool](https://github.com/SChernykh/p2pool) Monero mining.
 Get mining alerts and events automatically, or send an email anytime, anywhere to request your latest mining status.
 
 ## Supported Notifications
