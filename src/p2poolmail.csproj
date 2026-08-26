@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>p2poolmail</AssemblyName>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PublishAot>true</PublishAot>
+  </PropertyGroup>
+  <ItemGroup>
+    <Content Include="Config.toml">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+    <PackageReference Include="MailKitLite" Version="4.17.0" />
+    <PackageReference Include="Tomlyn" Version="2.10.1" />
+  </ItemGroup>
+</Project>

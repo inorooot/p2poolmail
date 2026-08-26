@@ -1,0 +1,46 @@
+# p2poolmail config setting
+  
+[p2pool_log]
+file_path = "/path/to/p2pool.log" # Path to the P2Pool log file
+data_api_dir = "/path/to/data_api_dir/"  # point to the P2Pool data API directory， --data-api <data_api_dir>
+
+[smtp]
+host = "smtp.example.com"                # SMTP server hostname
+port = 465                           
+useSsl = true                             # Enable SSL for the SMTP connection
+username = "sender@example.com"          # SMTP login username
+fromName = "p2poolmail"                  # Display name shown to recipients
+password = "YOUR_SMTP_CREDENTIAL"        # Use the credential required by your provider,OAuth2 unsupported
+
+[receiver]
+toAddress = "alerts@example.com"         # Address that receives notifications
+
+[notify_event]
+share_found = true                        # Notify when a share is found
+got_payout = true                         # Notify when a payout is received
+worker_down_up = true                     # Notify when a worker goes up or down
+
+[imap_server]
+enable = false                            # Enable email-triggered statistics reports
+host = "imap.example.com"                 # IMAP server hostname
+port = 993                                 # IMAP port 
+useSsl = true                              # Enable SSL for the IMAP connection
+username = "receiver@example.com"         # IMAP login username
+password = "YOUR_IMAP_CREDENTIAL"        # Use the credential required by your provider,OAuth2 unsupported
+
+[keepalive]
+enable_remote_ping = false                # Enable periodic requests to a remote URL
+interval_minutes = 10                     # Interval between keepalive pings
+ping_url = ""                             # URL used when remote ping is enabled
+
+[daily_stats]
+enable = true                             # Enable scheduled daily statistics
+time_of_day = "18:00"                     # Local time for the  report (HH:mm)
+frequency_hours = 24                      # No changes required
+
+#Starts by default
+#[alter]
+#Monerod is not synchronized=true
+#Monerod is busy syncing=true
+#JSONRPCRequest error EBADF=true
+#P2PServer ZMQ is not running=true
