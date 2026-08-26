@@ -27,7 +27,7 @@ just send an email with the subject **hello** to the mailbox watched by `[imap_s
 
 ## Requirements
 
-p2poolmail requires P2Pool to be started with **both** of these options:
+p2poolmail requires [P2Pool](https://github.com/SChernykh/p2pool/blob/master/docs/COMMAND_LINE.MD) to be started with **both** of these options:
 
 ```sh
 ./p2pool ... --stratum-api --data-api <data_api_dir>
