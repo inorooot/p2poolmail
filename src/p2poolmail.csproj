@@ -8,6 +8,9 @@
     <PublishAot>true</PublishAot>
   </PropertyGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="p2poolmail.Tests" />
+  </ItemGroup>
+  <ItemGroup>
     <Content Include="Config.toml">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>

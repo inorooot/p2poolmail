@@ -38,7 +38,10 @@ namespace p2poolmail
                         _stuckUid = null;
                         _stuckUidAttempts = 0;
 
-                        await folder.AddFlagsAsync([uid], MessageFlags.Seen, true, cancellationToken).ConfigureAwait(false);
+                        // Mark as seen with silent=true (RFC 3501 §6.4.6): the server
+                        // should NOT send an untagged FETCH response, reducing traffic.
+                        // This is safe because we already have the message content.
+                        await folder.AddFlagsAsync([uid], MessageFlags.Seen, silent: true, cancellationToken).ConfigureAwait(false);
                     }
                     catch (OperationCanceledException)
                     {

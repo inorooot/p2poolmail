@@ -6,6 +6,9 @@ namespace p2poolmail
     {
         private static readonly CancellationTokenSource CancellationTokenSource = new();
 
+        /// <summary>Subject that triggers a status reply (case-insensitive).</summary>
+        private const string TriggerSubject = "hello";
+
         private static async Task<int> Main(string[] args)
         {
             Console.CancelKeyPress += OnCancelRequested;
@@ -164,6 +167,7 @@ namespace p2poolmail
         /// Provider-friendly: automatic/bounce senders (no-reply, mailer-daemon, ...) never get a
         /// reply - answering them creates pointless outbound traffic and feeds spam backscatter.
         /// When [imap_server].reply_allowlist is non-empty, only listed senders are answered.
+        /// Only emails with subject "hello" (case-insensitive) trigger a reply.
         /// </summary>
         private static Task OnNewMailAsync(MimeMessage message)
         {
@@ -172,6 +176,13 @@ namespace p2poolmail
 
             if (string.IsNullOrWhiteSpace(message.Subject))
                 return Task.CompletedTask;
+
+            // Only process emails with subject "hello" (case-insensitive)
+            if (!message.Subject.Equals(TriggerSubject, StringComparison.OrdinalIgnoreCase))
+            {
+                CommonHelper.WriteLine($"IMAP: skipped - subject '{message.Subject}' is not '{TriggerSubject}'");
+                return Task.CompletedTask;
+            }
 
             if (from == null || IsAutoSender(from))
             {
