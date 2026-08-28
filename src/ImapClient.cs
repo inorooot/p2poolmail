@@ -394,10 +394,9 @@ namespace p2poolmail
             var supportsIdle = _client.Capabilities.HasFlag(ImapCapabilities.Idle);
             using var idleDoneCts = new CancellationTokenSource();
             var sessionId = Guid.NewGuid().ToString("N")[..8];
-            string ts() => DateTime.UtcNow.ToString("o");
-            _logger?.Invoke($"[{ts()}][{sessionId}] IdleLoopIteration start: folder={folder.FullName}, count={folder.Count}, unread={folder.Unread}");
+            _logger?.Invoke($"[{sessionId}] IdleLoopIteration start: folder={folder.FullName}, count={folder.Count}, unread={folder.Unread}");
 
-            var handlers = SubscribeFolderHandlers(folder, idleDoneCts, sessionId, ts);
+            var handlers = SubscribeFolderHandlers(folder, idleDoneCts, sessionId);
 
             try
             {
@@ -412,23 +411,23 @@ namespace p2poolmail
             if (folder.Count != initialCount)
                 _logger?.Invoke($"Folder changed: {initialCount} → {folder.Count} messages");
 
-            _logger?.Invoke($"[{ts()}][{sessionId}] IdleLoopIteration before CheckAndProcessNewMessageAsync");
+            _logger?.Invoke($"[{sessionId}] IdleLoopIteration before CheckAndProcessNewMessageAsync");
             await CheckAndProcessNewMessageAsync(folder, supportsIdle, onNewMessage, token).ConfigureAwait(false);
-            _logger?.Invoke($"[{ts()}][{sessionId}] IdleLoopIteration completed");
+            _logger?.Invoke($"[{sessionId}] IdleLoopIteration completed");
         }
 
-        private (EventHandler<EventArgs> CountChanged, EventHandler<MessageEventArgs> MessageExpunged, EventHandler<MessageFlagsChangedEventArgs> MessageFlagsChanged) SubscribeFolderHandlers(IMailFolder folder, CancellationTokenSource idleDoneCts, string sessionId, Func<string> timestampFactory)
+        private (EventHandler<EventArgs> CountChanged, EventHandler<MessageEventArgs> MessageExpunged, EventHandler<MessageFlagsChangedEventArgs> MessageFlagsChanged) SubscribeFolderHandlers(IMailFolder folder, CancellationTokenSource idleDoneCts, string sessionId)
         {
             void CancelIdleOnEvent(string eventName, string details)
             {
                 try
                 {
-                    _logger?.Invoke($"[{timestampFactory()}][{sessionId}] Folder.{eventName} event: {details}");
+                    _logger?.Invoke($"[{sessionId}] Folder.{eventName} event: {details}");
                     TryCancel(idleDoneCts);
                 }
                 catch (Exception ex)
                 {
-                    _logger?.Invoke($"[{timestampFactory()}][{sessionId}] {eventName} handler error: {ex.Message}");
+                    _logger?.Invoke($"[{sessionId}] {eventName} handler error: {ex.Message}");
                 }
             }
 

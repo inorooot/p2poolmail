@@ -195,6 +195,7 @@ internal sealed class FileTailer
         _stream = OpenReadStream(_path);
         if (_stream == null) return;
 
+        CommonHelper.WriteLine($"Log file opened: {_path}");
         _readPosition = _stream.Length;
         _decoder.Reset();
         _lineBufferLength = 0;
@@ -210,6 +211,7 @@ internal sealed class FileTailer
 
     private void HandleTruncation()
     {
+        CommonHelper.WriteWarn($"Log file {_path} was truncated or rotated - reopening from the beginning");
         DisposeStream();
         _stream = OpenReadStream(_path);
         _readPosition = 0;

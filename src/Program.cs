@@ -4,16 +4,23 @@ namespace p2poolmail
 {
     internal sealed class Program
     {
-        private const string SingleInstanceMutexName = "p2poolmail.single-instance";
         private static readonly CancellationTokenSource CancellationTokenSource = new();
 
         private static async Task<int> Main(string[] args)
         {
             Console.CancelKeyPress += OnCancelRequested;
 
-            // Single-instance guard: createdNew == false means another instance is already running.
-            using var singleInstanceMutex = new Mutex(initiallyOwned: false, name: SingleInstanceMutexName, createdNew: out bool createdNew);
-            if (!createdNew)
+            // Single-instance guard: named Mutex does NOT work under NativeAOT on Linux
+            // (every process observed createdNew == true and several instances ran side
+            // by side). Use an exclusive global lock file instead - FileShare.None is
+            // enforced by the OS, and the handle is released automatically on any kind
+            // of process exit, so a leftover file never blocks the next start.
+            FileStream instanceLock;
+            try
+            {
+                instanceLock = AcquireInstanceLock();
+            }
+            catch (IOException)
             {
                 CommonHelper.WriteWarn("p2poolmail is already running. This instance will exit.");
                 return 1;
@@ -25,8 +32,32 @@ namespace p2poolmail
             }
             finally
             {
-                TryReleaseMutex(singleInstanceMutex);
+                instanceLock.Dispose();
             }
+        }
+
+        /// <summary>
+        /// Opens the global lock file <c>/tmp/p2poolmail.single-instance.lock</c> with
+        /// FileShare.None. Throws IOException when another running instance holds it.
+        /// </summary>
+        private static FileStream AcquireInstanceLock()
+        {
+            var path = Path.Combine(Path.GetTempPath(), "p2poolmail.single-instance.lock");
+            var stream = new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+            try
+            {
+                stream.SetLength(0);
+                var info = System.Text.Encoding.ASCII.GetBytes(
+                    $"pid={Environment.ProcessId} started={DateTime.UtcNow:yyyy-MM-dd HH:mm:ss}Z\n");
+                stream.Write(info, 0, info.Length);
+                stream.Flush();
+            }
+            catch
+            {
+                // Diagnostics only - a failure to write the pid must not break the lock.
+            }
+
+            return stream;
         }
 
         /// <summary>
@@ -48,15 +79,36 @@ namespace p2poolmail
 
             // Miner Tracker: report online worker count every 5 seconds (fire-and-forget; the loop handles its own exceptions).
             if (Settings.Current.notify_event.worker_down_up)
+            {
                 _ = Task.Run(PollWorkersLoop);
+                CommonHelper.WriteLine("Worker count poller started (every 5s)");
+            }
+            else
+            {
+                CommonHelper.WriteLine("Worker count poller disabled ([notify_event].worker_down_up = false)");
+            }
 
             // Keepalive: periodic healthchecks.io heartbeat from [keepalive] config (fire-and-forget; the loop handles its own exceptions).
             if (Settings.Current.keepalive.enable_remote_ping)
+            {
                 _ = Task.Run(() => NotifyManager.KeepaliveLoopAsync(CancellationTokenSource.Token));
+                CommonHelper.WriteLine("Keepalive heartbeat enabled");
+            }
+            else
+            {
+                CommonHelper.WriteLine("Keepalive heartbeat disabled ([keepalive].enable_remote_ping = false)");
+            }
 
             // Daily stats: scheduled mining summary report from [daily_stats] config (fire-and-forget; the loop handles its own exceptions).
             if (Settings.Current.daily_stats.enable)
+            {
                 _ = Task.Run(() => NotifyManager.DailyStatsLoopAsync(CancellationTokenSource.Token));
+                CommonHelper.WriteLine("Daily stats scheduler enabled");
+            }
+            else
+            {
+                CommonHelper.WriteLine("Daily stats scheduler disabled ([daily_stats].enable = false)");
+            }
 
             // Dev helper: `p2poolmail --sendtest` sends one test email and exits.
             if (args.Length > 0 && args[0] == "--sendtest")
@@ -153,7 +205,6 @@ namespace p2poolmail
             try
             {
                 var tailer = new FileTailer(Settings.Current.p2pool_log.file_path);
-                 CommonHelper.WriteLine("Monitoring started");
                 await tailer.RunAsync(CancellationTokenSource.Token);
                 return 0;
             }
@@ -171,6 +222,8 @@ namespace p2poolmail
         /// <summary>Unified shutdown: disconnect IMAP, then abort the mail queue without drain wait.</summary>
         private static async Task ShutdownAsync(ImapClientService? imapService)
         {
+            CommonHelper.WriteLine("Shutting down...");
+
             if (imapService is not null)
             {
                 try
@@ -187,18 +240,6 @@ namespace p2poolmail
 
             // The main process is ending; do not spend any time draining the queue.
             await EmailQueue.AbortAsync().ConfigureAwait(false);
-        }
-
-        private static void TryReleaseMutex(Mutex mutex)
-        {
-            try
-            {
-                mutex.ReleaseMutex();
-            }
-            catch (ApplicationException)
-            {
-                // Ignore when the current thread does not own the mutex.
-            }
         }
 
         /// <summary>Dev helper: send an SMTP test email (fully asynchronous, never blocks the caller).</summary>
@@ -218,6 +259,7 @@ namespace p2poolmail
         private static void OnCancelRequested(object? sender, ConsoleCancelEventArgs e)
         {
             e.Cancel = true; // Suppress the default termination and shut down cooperatively instead.
+            CommonHelper.WriteLine("Ctrl+C received - shutting down...");
             CancellationTokenSource.Cancel();
         }
     }
