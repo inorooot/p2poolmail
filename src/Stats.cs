@@ -68,7 +68,7 @@ public static class Stats
         var title = $"{EmailIcons.Stats} Daily p2pool report (last 24h)";
         var body =
             $"{EmailIcons.Info} Hello workers,Here's what happened in the last 24 hours:\r\n" +
-            $"{EmailIcons.Received} Recevied    : {xmr.ToString("0.############", CultureInfo.InvariantCulture)} XMR ({payouts} payment(s))\r\n" +
+            $"{EmailIcons.Payout} Recevied    : {xmr.ToString("0.############", CultureInfo.InvariantCulture)} XMR ({payouts} payment(s))\r\n" +
             $"{EmailIcons.ShareFound} Share found : {shares}\r\n" +
             $"Current: \r\n {LocalStratum.StratumTxtFormatLittle()}";
 

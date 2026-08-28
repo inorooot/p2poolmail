@@ -66,10 +66,7 @@ internal static class NotifyManager
 
             try
             {
-                var icon = trend == MinerTracker.SmoothedTrend.Up ? EmailIcons.TrendUp
-                         : trend == MinerTracker.SmoothedTrend.Down ? EmailIcons.TrendDown
-                         : EmailIcons.TrendFlat;
-                var subject = $"{icon} Worker online count: {prev} -> {cur}";
+                var subject = $"{EmailIcons.Workers} Worker online count: {prev} -> {cur}";
                 // timestampUtc is a unix-seconds long; convert before applying the ":u" format,
                 // otherwise interpolation throws FormatException and the mail is silently lost.
                 var body = $"\n{EmailIcons.Workers} Previous: {prev}\n{EmailIcons.Workers} Current: {cur}\nTrend: {trend}\n";

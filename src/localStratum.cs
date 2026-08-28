@@ -69,7 +69,7 @@ namespace p2poolmail
         {
                
             var msg = new StringBuilder();
-            msg.Append($"{EmailIcons.Mail} Hi,Instruction received at {DateTime.Now.ToString("HH:mm:ss")}.").Append("\r\n");
+            msg.Append($"{EmailIcons.Info} Hi,Instruction received at {DateTime.Now.ToString("HH:mm:ss")}.").Append("\r\n");
             var stream = LoadLocalStratum();
             if (stream is null) return string.Empty;
 
@@ -77,11 +77,11 @@ namespace p2poolmail
             
             msg.Append(EmailIcons.Workers).Append(" Total worker: ").Append(stream.Connections).Append("\r\n");
             //msg.Append("Total hashes: ").Append(stream.TotalHashes);
-            msg.Append(EmailIcons.Hashrate).Append(" Hashrate_15m: ").Append(stream.Hashrate15m / 1000m).Append(" KH/s").Append("\r\n");
-            msg.Append("  ").Append(" Hashrate_1h: ").Append(stream.Hashrate1h / 1000m).Append(" KH/s").Append("\r\n");
-            msg.Append("  ").Append(" Hashrate_24h: ").Append(stream.Hashrate24h / 1000m).Append(" KH/s").Append("\r\n");
-            msg.Append(EmailIcons.Effort).Append(" Average effort: ").Append(stream.AverageEffort).Append("%\r\n");
-            msg.Append("  ").Append(" Current effort: ").Append(stream.CurrentEffort).Append("%\r\n");
+            msg.Append(" Hashrate_15m: ").Append(stream.Hashrate15m / 1000m).Append(" KH/s").Append("\r\n");
+            msg.Append(" Hashrate_1h: ").Append(stream.Hashrate1h / 1000m).Append(" KH/s").Append("\r\n");
+            msg.Append(" Hashrate_24h: ").Append(stream.Hashrate24h / 1000m).Append(" KH/s").Append("\r\n");
+            msg.Append(" Average effort: ").Append(stream.AverageEffort).Append("%\r\n");
+            msg.Append(" Current effort: ").Append(stream.CurrentEffort).Append("%\r\n");
             msg.Append("[ Name / IP / Uptime / Hashrate ]").Append("\r\n");
             foreach (var worker in workers)
             {
@@ -120,11 +120,11 @@ namespace p2poolmail
             if (stream is null) return string.Empty;                    
              msg.Append(EmailIcons.Workers).Append(" Total worker: ").Append(stream.Connections).Append("\r\n");
             //msg.Append("Total hashes: ").Append(stream.TotalHashes);
-            msg.Append(EmailIcons.Hashrate).Append(" Hashrate_15m: ").Append(stream.Hashrate15m / 1000m).Append(" KH/s").Append("\r\n");
-            msg.Append(EmailIcons.Hashrate).Append(" Hashrate_1h: ").Append(stream.Hashrate1h / 1000m).Append(" KH/s").Append("\r\n");
-            msg.Append(EmailIcons.Hashrate).Append(" Hashrate_24h: ").Append(stream.Hashrate24h / 1000m).Append(" KH/s").Append("\r\n");
-            msg.Append(EmailIcons.Effort).Append(" Average effort: ").Append(stream.AverageEffort).Append("%\r\n");
-            msg.Append(EmailIcons.Effort).Append(" Current effort: ").Append(stream.CurrentEffort).Append("%\r\n");
+            msg.Append(" Hashrate_15m: ").Append(stream.Hashrate15m / 1000m).Append(" KH/s").Append("\r\n");
+            msg.Append(" Hashrate_1h: ").Append(stream.Hashrate1h / 1000m).Append(" KH/s").Append("\r\n");
+            msg.Append(" Hashrate_24h: ").Append(stream.Hashrate24h / 1000m).Append(" KH/s").Append("\r\n");
+            msg.Append(" Average effort: ").Append(stream.AverageEffort).Append("%\r\n");
+            msg.Append(" Current effort: ").Append(stream.CurrentEffort).Append("%\r\n");
 
             return msg.ToString();
         }

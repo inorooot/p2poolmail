@@ -115,7 +115,7 @@ namespace p2poolmail
             if (!string.IsNullOrWhiteSpace(message.Subject))
             {
                 var stats = NotifyManager.RequestByEmail();
-                EmailQueue.Enqueue($"{EmailIcons.Mail} Reply: your mining status", stats); // fire-and-forget; delivered by the EmailQueue background worker.
+                EmailQueue.Enqueue($"{EmailIcons.Info} Reply: your mining status", stats); // fire-and-forget; delivered by the EmailQueue background worker.
             }
 
             return Task.CompletedTask;
