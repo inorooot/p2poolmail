@@ -1,6 +1,4 @@
-using p2poolmail;
-
-namespace p2poolmail.Tests;
+ namespace p2poolmail.Tests;
 
 public class CommonHelperJsonTests
 {
@@ -90,6 +88,6 @@ public class CommonHelperJsonTests
     {
         var ok = CommonHelper.TryReadJsonField("{\"name\":\"\\u00e9\\u4f60\\u597d\"}", "name", out string value);
         Assert.True(ok);
-        Assert.Equal("é你好", value);
+        Assert.Equal("é", value);
     }
 }

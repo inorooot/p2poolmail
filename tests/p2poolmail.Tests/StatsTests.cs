@@ -3,10 +3,7 @@ using p2poolmail;
 
 namespace p2poolmail.Tests;
 
-/// <summary>
-/// Tests Stats.Observe payout parsing/counting. The counters are private static,
-/// read back via reflection. Stats state is static, so each test resets it.
-/// </summary>
+ 
 public class StatsTests
 {
     public StatsTests()

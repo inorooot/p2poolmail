@@ -45,8 +45,8 @@ public class AhoCorasickTreeTests
         var tree = new AhoCorasickTree(["error"]);
         // Non-ASCII chars map to -1 and reset to root; must not throw. The match
         // after the non-ASCII run must still be found.
-        Assert.True(tree.Contains("错误: error 你好"));
-        Assert.False(tree.Contains("错误你好"));
+        Assert.True(tree.Contains("こんにちは错误: error 你好"));
+        Assert.False(tree.Contains("こんにちは错误你好"));
     }
 
     [Fact]
