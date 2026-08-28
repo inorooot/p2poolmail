@@ -8,23 +8,36 @@ namespace p2poolmail;
 
 internal sealed class EmailSender : IAsyncDisposable
 {
-    private static readonly TimeSpan MaxIdle = TimeSpan.FromMinutes(3);
+    // Provider SMTP idle timeouts are typically ~5 minutes, but the NoOp probe
+    // (below) safely detects dead connections, so idle clients can be kept longer.
+    // 10 minutes lets sparse traffic (minutes between emails) mostly reuse the
+    // connection via NoOp instead of reconnecting + re-authenticating every send,
+    // which is friendlier to providers that rate-limit connection/auth attempts.
+    private static readonly TimeSpan MaxIdle = TimeSpan.FromMinutes(10);
     private static readonly TimeSpan NoOpAfter = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan DisconnectTimeout = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan MinSendInterval = TimeSpan.FromSeconds(1); // default rate limit 1s
 
     private readonly Settings.SMTP _smtp;
     private readonly string _user;
     private readonly bool _auth;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private SmtpClient? _client;
+    // _lastOk/_lastAttemptTick are only read/written by the single EmailQueue worker
+    // thread while holding _gate (DisposeAsync never touches them), so plain access
+    // is sufficient - no volatile/interlocked needed.
     private long _lastOk;
+    private long _lastAttemptTick;
     private int _disposed;
 
     public EmailSender(Settings.SMTP smtp)
     {
         _smtp = smtp;
-        _user = string.IsNullOrWhiteSpace(smtp.username) ? smtp.username : smtp.username;
+        _user = smtp.username ?? string.Empty;
         _auth = !string.IsNullOrWhiteSpace(_user) && !string.IsNullOrWhiteSpace(smtp.password);
+        // Seed with current time so a process starting within the first second after
+        // boot does not trigger a spurious rate-limit wait (TickCount64 would be ~0).
+        _lastAttemptTick = Environment.TickCount64;
     }
 
     public async Task SendAsync(MimeMessage message, TimeSpan timeout, CancellationToken cancellation)
@@ -38,34 +51,50 @@ internal sealed class EmailSender : IAsyncDisposable
             // Print the send action itself so every SMTP send is visible in the log.
             CommonHelper.WriteLine($"SMTP: sending \"{message.Subject}\" (timeout={timeout.TotalSeconds:F0}s)");
 
-            Exception? last = null;
             for (var pass = 0; pass < 2; pass++)
             {
+                await EnforceRateLimitAsync(cancellation).ConfigureAwait(false);
                 using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
                 cts.CancelAfter(timeout);
                 try
                 {
                     var client = await ConnectAsync(cts.Token).ConfigureAwait(false);
+                    // Connect/auth above ran under the ctor's 30s Timeout plus cts;
+                    // this Timeout governs the SMTP session IO of the send itself.
                     client.Timeout = (int)Math.Clamp(timeout.TotalMilliseconds, 1, int.MaxValue);
                     await client.SendAsync(message, cts.Token).ConfigureAwait(false);
+                    _lastAttemptTick = Environment.TickCount64;
                     _lastOk = Environment.TickCount64;
                     return;
                 }
                 catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
                 {
+                    _lastAttemptTick = Environment.TickCount64;
                     CommonHelper.WriteWarn("SMTP: send canceled, disconnecting");
+                    await DisconnectAsync().ConfigureAwait(false);
+                    throw;
+                }
+                catch (OperationCanceledException) when (!cancellation.IsCancellationRequested)
+                {
+                    // Send timed out; the connection state is unknown, so discard it.
+                    // Propagate instead of retrying in place: EmailQueue applies its
+                    // own attempt cap and exponential backoff, and an immediate retry
+                    // here would double the worst-case latency per send.
+                    _lastAttemptTick = Environment.TickCount64;
+                    CommonHelper.WriteWarn($"SMTP: send/connect timed out after {timeout.TotalSeconds:F0}s, disconnecting");
                     await DisconnectAsync().ConfigureAwait(false);
                     throw;
                 }
                 catch (SmtpCommandException ex) when ((int)ex.StatusCode >= 500)
                 {
+                    _lastAttemptTick = Environment.TickCount64;
                     CommonHelper.WriteError($"SMTP: permanent error {(int)ex.StatusCode}, aborting send: {ex.Message}");
                     await DisconnectAsync().ConfigureAwait(false);
                     throw;
                 }
                 catch (Exception ex)
                 {
-                    last = ex;
+                    _lastAttemptTick = Environment.TickCount64;
                     CommonHelper.WriteWarn(pass == 0
                         ? $"SMTP: send attempt failed: {ex.Message} - reconnecting and retrying"
                         : $"SMTP: send attempt failed again: {ex.Message}");
@@ -75,12 +104,31 @@ internal sealed class EmailSender : IAsyncDisposable
                 }
             }
 
-            throw last ?? new InvalidOperationException("SMTP send failed");
+            // Unreachable: the second pass always rethrows from the catch above.
+            // Kept defensive so a future edit can never fall through and report
+            // success without actually having sent anything.
+            throw new InvalidOperationException("SMTP send failed");
         }
         finally
         {
             _gate.Release();
         }
+    }
+
+    private async Task EnforceRateLimitAsync(CancellationToken cancellation)
+    {
+        if (MinSendInterval <= TimeSpan.Zero)
+            return;
+
+        var elapsed = Environment.TickCount64 - _lastAttemptTick;
+        if (elapsed < 0)
+            elapsed = 0;
+        if (elapsed >= MinSendInterval.TotalMilliseconds)
+            return;
+
+        var delay = MinSendInterval - TimeSpan.FromMilliseconds(elapsed);
+        CommonHelper.WriteDebug($"SMTP: rate limiting, waiting {delay.TotalMilliseconds:F0}ms");
+        await Task.Delay(delay, cancellation).ConfigureAwait(false);
     }
 
     private async Task<SmtpClient> ConnectAsync(CancellationToken cancellation)
@@ -96,7 +144,7 @@ internal sealed class EmailSender : IAsyncDisposable
         var client = new SmtpClient { Timeout = 30_000 };
         try
         {
-            CommonHelper.WriteLine($"SMTP: connecting to {_smtp.host}:{_smtp.port} (useSsl={_smtp.useSsl})");
+            CommonHelper.WriteDebug($"SMTP: connecting to {_smtp.host}:{_smtp.port} (useSsl={_smtp.useSsl})");
             await client.ConnectAsync(_smtp.host, _smtp.port, SocketOptions(), cancellation).ConfigureAwait(false);
             if (_auth)
             {
@@ -130,7 +178,8 @@ internal sealed class EmailSender : IAsyncDisposable
         if (Environment.TickCount64 - _lastOk >= MaxIdle.TotalMilliseconds)
             return null;
 
-        if (Environment.TickCount64 - _lastOk < NoOpAfter.TotalMilliseconds)
+        var idleMs = Environment.TickCount64 - _lastOk;
+        if (idleMs < NoOpAfter.TotalMilliseconds)
         {
             CommonHelper.WriteDebug("SMTP: reusing client without NoOp");
             return client;
@@ -142,12 +191,18 @@ internal sealed class EmailSender : IAsyncDisposable
             cts.CancelAfter(TimeSpan.FromSeconds(5));
             await client.NoOpAsync(cts.Token).ConfigureAwait(false);
             _lastOk = Environment.TickCount64;
-            CommonHelper.WriteDebug("SMTP: NoOp succeeded, reusing client");
+            CommonHelper.WriteDebug($"SMTP: NoOp succeeded after {idleMs / 1000.0:F0}s idle, reusing client");
             return client;
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+            // Aborting: rethrow instead of swallowing the cancellation and attempting
+            // a doomed reconnect (which would only add a wasted disconnect + connect).
+            throw;
         }
         catch (Exception ex)
         {
-            CommonHelper.WriteWarn($"SMTP: NoOp failed, will reconnect: {ex.Message}");
+            CommonHelper.WriteWarn($"SMTP: NoOp failed after {idleMs / 1000.0:F0}s idle, will reconnect: {ex.Message}");
             return null;
         }
     }
@@ -167,7 +222,7 @@ internal sealed class EmailSender : IAsyncDisposable
 
         try
         {
-            CommonHelper.WriteLine("SMTP: disconnecting client");
+            CommonHelper.WriteDebug("SMTP: disconnecting client");
             if (client.IsConnected)
             {
                 using var cts = new CancellationTokenSource(DisconnectTimeout);
@@ -187,7 +242,18 @@ internal sealed class EmailSender : IAsyncDisposable
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
             return;
 
-        await _gate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            // Bound the wait: an in-flight send (up to 2 passes) can hold the gate.
+            // On timeout, skip the disconnect - the in-flight send cleans up its own
+            // connection on failure, and _disposed=1 already blocks all future sends.
+            await _gate.WaitAsync(TimeSpan.FromSeconds(30)).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            CommonHelper.WriteWarn("SMTP: dispose timed out waiting for an in-flight send; skipping disconnect");
+            return;
+        }
         try { await DisconnectAsync().ConfigureAwait(false); }
         finally
         {

@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Threading.Channels;
 using MailKit.Net.Smtp;
+using MailKit.Security;
 using MimeKit;
 
 namespace p2poolmail;
@@ -11,7 +12,12 @@ internal sealed class EmailQueue : IAsyncDisposable
 
     private const int WarnPending = 256;
     private const int MaxPending = 1024;
-    private const int MaxAttempts = 8;
+    /// <summary>Maximum delivery attempts per email (including the first). Reduced from 8 to lower connection churn during SMTP outages.</summary>
+    private const int MaxAttempts = 5;
+    /// <summary>Initial backoff between delivery retries (ms). Increased so rapid retry bursts don't worsen rate limiting.</summary>
+    private const int InitialRetryDelayMs = 2_000;
+    /// <summary>Maximum backoff between delivery retries (ms). Raised so the server recovery window is longer.</summary>
+    private const int MaxRetryDelayMs = 15_000;
     private static EmailQueue? _instance;
 
     private readonly Channel<MailJob> _channel = Channel.CreateBounded<MailJob>(new BoundedChannelOptions(MaxPending)
@@ -30,7 +36,7 @@ internal sealed class EmailQueue : IAsyncDisposable
     private int _pending;
     private int _stopping;
 
-    private readonly record struct MailJob(MimeMessage Message, TaskCompletionSource<bool>? Done);
+    private readonly record struct MailJob(MimeMessage Message, TaskCompletionSource<bool>? Done, string? CorrelationId);
 
     private EmailQueue(Settings.SMTP smtp, Settings.Receiver receiver)
     {
@@ -66,18 +72,22 @@ internal sealed class EmailQueue : IAsyncDisposable
             throw;
         }
         if (Interlocked.CompareExchange(ref _instance, created, null) is not null)
-            created.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        {
+            // Losing instance of a concurrent double-init: abort it immediately
+            // (nothing was ever enqueued) instead of blocking up to the drain timeout.
+            created.DisposeAsync(TimeSpan.Zero).AsTask().GetAwaiter().GetResult();
+        }
     }
 
     public static void Enqueue(string subject, string body, string? correlationId = null, bool isHtml = false)
     {
         var q = Volatile.Read(ref _instance);
-        if (q is null || q._stopping != 0)
+        if (q is null || Volatile.Read(ref q._stopping) != 0)
         {
             CommonHelper.WriteWarn($"EmailQueue unavailable, skipped: {subject}");
             return;
         }
-        q.Write(new MailJob(q.Create(subject, body, correlationId, isHtml), null));
+        q.Write(new MailJob(q.Create(subject, body, correlationId, isHtml), null, correlationId));
     }
 
     /// <summary>
@@ -86,14 +96,14 @@ internal sealed class EmailQueue : IAsyncDisposable
     public static async Task<SendResult> SendAsync(string subject, string body, string? correlationId = null, bool isHtml = false)
     {
         var q = Volatile.Read(ref _instance);
-        if (q is null || q._stopping != 0)
+        if (q is null || Volatile.Read(ref q._stopping) != 0)
         {
             CommonHelper.WriteWarn($"EmailQueue not initialized, cannot send: {subject}");
             return SendResult.NotInitialized;
         }
 
         var done = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        q.Write(new MailJob(q.Create(subject, body, correlationId, isHtml), done));
+        q.Write(new MailJob(q.Create(subject, body, correlationId, isHtml), done, correlationId));
         try
         {
             return await done.Task.ConfigureAwait(false) ? SendResult.Sent : SendResult.Failed;
@@ -132,7 +142,7 @@ internal sealed class EmailQueue : IAsyncDisposable
             return;
         }
 
-        if (n == WarnPending || (n > WarnPending && n % WarnPending == 0))
+        if (n % WarnPending == 0) // covers WarnPending, 2x, 3x... (never reached past MaxPending)
             CommonHelper.WriteWarn($"EmailQueue backlog={n}");
 
         if (_channel.Writer.TryWrite(job))
@@ -149,7 +159,9 @@ internal sealed class EmailQueue : IAsyncDisposable
     private static void Reject(MailJob job, string reason)
     {
         CommonHelper.WriteWarn($"{reason}: {job.Message.Subject}");
-        job.Done?.TrySetResult(false);
+        // The job was never handed to the worker (queue stopping/full), so report it
+        // as canceled (Dropped) - distinct from a real SMTP delivery failure (Failed).
+        job.Done?.TrySetCanceled();
     }
 
     private MimeMessage Create(string subject, string body, string? correlationId, bool isHtml)
@@ -213,7 +225,7 @@ internal sealed class EmailQueue : IAsyncDisposable
 
     private async Task<bool> DeliverAsync(MimeMessage message)
     {
-        var delay = 1000;
+        var delay = InitialRetryDelayMs;
         var started = Stopwatch.StartNew();
         for (var n = 1; n <= MaxAttempts; n++)
         {
@@ -239,6 +251,18 @@ internal sealed class EmailQueue : IAsyncDisposable
                 CommonHelper.WriteError($"Email discarded (SMTP {(int)ex.StatusCode}): {message.Subject}: {ex.Message}");
                 return false;
             }
+            // Configuration-level errors cannot succeed on retry - drop immediately
+            // instead of burning all attempts (and ~2 minutes of backoff) on them.
+            catch (AuthenticationException ex)
+            {
+                CommonHelper.WriteError($"Email discarded (SMTP authentication failed, check username/password in Config.toml): {message.Subject}: {ex.Message}");
+                return false;
+            }
+            catch (SslHandshakeException ex)
+            {
+                CommonHelper.WriteError($"Email discarded (TLS/SSL handshake failed, check useSsl/port in Config.toml): {message.Subject}: {ex.Message}");
+                return false;
+            }
             catch (Exception ex)
             {
                 if (n == MaxAttempts)
@@ -249,9 +273,8 @@ internal sealed class EmailQueue : IAsyncDisposable
 
                 CommonHelper.WriteWarn($"Email send failed (attempt {n}/{MaxAttempts}), will retry in {delay} ms: \"{message.Subject}\": {ex.Message}");
                 await Task.Delay(delay, _abort.Token).ConfigureAwait(false);
-                // Cap backoff so a short SMTP hiccup can still recover within
-                // a few attempts instead of stalling the worker indefinitely.
-                delay = Math.Min(delay * 2, 8_000);
+                // Exponential backoff so rapid retries don't worsen SMTP rate limiting.
+                delay = Math.Min(delay * 2, MaxRetryDelayMs);
             }
         }
 
