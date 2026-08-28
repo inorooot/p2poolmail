@@ -154,6 +154,18 @@ internal static class NotifyManager
     {
         var cfg = Settings.Current.keepalive;
         var url = cfg.ping_url.Trim();
+
+        // Strip zero-width / format characters (U+200B ZERO WIDTH SPACE, U+FEFF BOM,
+        // etc.) that silently sneak in when the URL is copied from a web page or chat
+        // window. char.Trim() does NOT remove them (they are not whitespace), and
+        // hc-ping.com then rejects the ping with 400 Bad Request.
+        var sanitized = new string(url.Where(c
+            => char.GetUnicodeCategory(c) != UnicodeCategory.Format
+            && !char.IsControl(c)).ToArray());
+        if (sanitized.Length != url.Length)
+            CommonHelper.WriteWarn($"keepalive: ping_url contained {url.Length - sanitized.Length} invisible character(s) - stripped");
+        url = sanitized;
+
         if (!url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
             !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
         {
@@ -217,7 +229,13 @@ internal static class NotifyManager
             try
             {
                 using var resp = await _keepaliveHttp!.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
-                return resp.IsSuccessStatusCode;
+                if (resp.IsSuccessStatusCode)
+                    return true;
+
+                // Non-2xx: logged (was silent before) but not retried - the server saw
+                // the request fine, so retrying would only repeat the same answer.
+                CommonHelper.WriteWarn($"keepalive: GET {url} returned HTTP {(int)resp.StatusCode} {resp.StatusCode}");
+                return false;
             }
             catch (Exception ex) when (!token.IsCancellationRequested)
             {
