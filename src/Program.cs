@@ -184,7 +184,7 @@ namespace p2poolmail
                 return Task.CompletedTask;
             }
 
-            if (from == null || IsAutoSender(from))
+            if (from == null)
             {
                 CommonHelper.WriteLine($"IMAP: skipped auto/bounce sender ({from ?? "no address"}) - no reply sent");
                 return Task.CompletedTask;
@@ -202,21 +202,7 @@ namespace p2poolmail
             EmailQueue.Enqueue($"{EmailIcons.Info} Reply: your mining status", stats); // fire-and-forget; delivered by the EmailQueue background worker.
             return Task.CompletedTask;
         }
-
-        /// <summary>Matches common automatic-sender local parts that must never be replied to.</summary>
-        private static bool IsAutoSender(string address)
-        {
-            var local = address.Split('@')[0];
-            return local.Equals("no-reply", StringComparison.OrdinalIgnoreCase)
-                || local.Equals("noreply", StringComparison.OrdinalIgnoreCase)
-                || local.Equals("donotreply", StringComparison.OrdinalIgnoreCase)
-                || local.EndsWith("-noreply", StringComparison.OrdinalIgnoreCase)
-                || local.EndsWith("_noreply", StringComparison.OrdinalIgnoreCase)
-                || local.Equals("mailer-daemon", StringComparison.OrdinalIgnoreCase)
-                || local.Equals("postmaster", StringComparison.OrdinalIgnoreCase)
-                || local.StartsWith("bounce", StringComparison.OrdinalIgnoreCase)
-                || local.StartsWith("noreply+", StringComparison.OrdinalIgnoreCase);
-        }
+ 
 
         /// <summary>Worker-count polling loop: reads the data-api connection count with debounce/trend detection.</summary>
         private static async Task PollWorkersLoop()
