@@ -4,49 +4,9 @@ using MimeKit;
 
 namespace p2poolmail
 {
-    /// <summary>Mail processing of <see cref="ImapClientService"/>: fetch unread, process new messages, mark as seen.</summary>
+    /// <summary>Mail processing of <see cref="ImapClientService"/>: process new messages, mark as seen.</summary>
     public partial class ImapClientService
     {
-        public async Task<IList<(UniqueId uid, MimeMessage message)>> FetchUnreadAsync(string? folderName = null, int maxMessages = 1, DateTimeOffset? since = null)
-        {
-            if (!_client.IsConnected)
-                await ConnectAsync().ConfigureAwait(false);
-
-            var folder = await ResolveAndOpenFolderAsync(folderName, FolderAccess.ReadOnly).ConfigureAwait(false);
-            var uids = (await folder.SearchAsync(SearchQuery.NotSeen).ConfigureAwait(false))
-                .OrderBy(x => x.Id)
-                .Take(Math.Max(1, maxMessages))
-                .ToList();
-
-            var results = new List<(UniqueId uid, MimeMessage message)>();
-            foreach (var uid in uids)
-            {
-                try
-                {
-                    results.Add((uid, await folder.GetMessageAsync(uid).ConfigureAwait(false)));
-                }
-                catch (Exception ex)
-                {
-                    _logger?.Invoke($"Failed to fetch message {uid}: {ex.Message}");
-                }
-            }
-
-            return results;
-        }
-
-        public async Task MarkAsSeenAsync(string? folderName, IEnumerable<UniqueId> uids)
-        {
-            if (uids == null)
-                return;
-
-            if (!_client.IsConnected)
-                await ConnectAsync().ConfigureAwait(false);
-
-            var folder = await ResolveAndOpenFolderAsync(folderName, FolderAccess.ReadWrite).ConfigureAwait(false);
-            var uidsList = uids as IList<UniqueId> ?? uids.ToList();
-            await folder.AddFlagsAsync(uidsList, MessageFlags.Seen, true).ConfigureAwait(false);
-        }
-
         private async Task CheckAndProcessNewMessageAsync(IMailFolder folder, bool isIdle, Func<MimeMessage, Task> onNewMessage, CancellationToken cancellationToken)
         {
             try
@@ -68,10 +28,17 @@ namespace p2poolmail
                         var message = await folder.GetMessageAsync(uid, cancellationToken).ConfigureAwait(false);
                         _logger?.Invoke($"Calling onNewMessage callback for: {message.Subject}");
                         await onNewMessage(message).ConfigureAwait(false);
-                        if (!await MarkMessageAsSeenAsync(folder, uid, cancellationToken).ConfigureAwait(false))
-                            break;
 
+                        // Advance the watermark BEFORE flagging as seen: the callback
+                        // already fired (a reply was enqueued), so a failed flag write
+                        // must not re-run it next iteration - that would send a
+                        // duplicate reply. The message simply stays unread on the
+                        // server, which is harmless.
                         _lastProcessedUid = uid;
+                        _stuckUid = null;
+                        _stuckUidAttempts = 0;
+
+                        await folder.AddFlagsAsync([uid], MessageFlags.Seen, true, cancellationToken).ConfigureAwait(false);
                     }
                     catch (OperationCanceledException)
                     {
@@ -79,7 +46,28 @@ namespace p2poolmail
                     }
                     catch (Exception ex)
                     {
-                        _logger?.Invoke($"Error processing UID {uid}: {ex.GetType().Name} - {ex.Message}");
+                        // A message that repeatedly cannot be fetched/replied/flagged (e.g.
+                        // expunged mid-flight, malformed MIME) must not stall the queue
+                        // forever: after MaxAttemptsPerUid strikes we advance the watermark
+                        // past it (it stays unread on the server) so newer mail still flows.
+                        if (uid == _stuckUid)
+                            _stuckUidAttempts++;
+                        else
+                        {
+                            _stuckUid = uid;
+                            _stuckUidAttempts = 1;
+                        }
+
+                        if (_stuckUidAttempts >= MaxAttemptsPerUid)
+                        {
+                            _logger?.Invoke($"ERROR: UID {uid} failed {_stuckUidAttempts} times ({ex.GetType().Name}: {ex.Message}) - skipping to keep newer mail flowing");
+                            _lastProcessedUid = uid;
+                            _stuckUid = null;
+                            _stuckUidAttempts = 0;
+                            continue;
+                        }
+
+                        _logger?.Invoke($"Error processing UID {uid} (attempt {_stuckUidAttempts}/{MaxAttemptsPerUid}): {ex.GetType().Name} - {ex.Message}");
                         break;
                     }
                 }
@@ -106,24 +94,6 @@ namespace p2poolmail
                 .OrderBy(u => u.Id)
                 .Take(_candidateLimit)
                 .ToList();
-        }
-
-        private async Task<bool> MarkMessageAsSeenAsync(IMailFolder folder, UniqueId uid, CancellationToken cancellationToken)
-        {
-            try
-            {
-                await folder.AddFlagsAsync([uid], MessageFlags.Seen, true, cancellationToken).ConfigureAwait(false);
-                return true;
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                _logger?.Invoke($"Warning: failed to mark UID {uid} as seen: {ex.Message}");
-                return false;
-            }
         }
     }
 }

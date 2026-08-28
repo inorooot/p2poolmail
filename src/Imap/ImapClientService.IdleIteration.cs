@@ -15,6 +15,17 @@ namespace p2poolmail
             var folder = await ResolveAndOpenFolderAsync(null, FolderAccess.ReadWrite, token).ConfigureAwait(false);
             var initialCount = folder.Count;
 
+            // UIDs are only comparable within one UIDVALIDITY epoch. When the server
+            // changes it (folder recreated, migration), old UIDs would make every new
+            // message look "already processed" - reset the watermark and re-bootstrap.
+            if (_lastUidValidity.HasValue && folder.UidValidity != _lastUidValidity.Value)
+            {
+                _logger?.Invoke($"IMAP UIDVALIDITY changed ({_lastUidValidity.Value} -> {folder.UidValidity}) - resetting last processed UID");
+                _lastProcessedUid = null;
+                _skippedExistingUnreadAtStartup = false;
+            }
+            _lastUidValidity = folder.UidValidity;
+
             await InitializeLastUidIfNeededAsync(folder).ConfigureAwait(false);
 
             var supportsIdle = _client.Capabilities.HasFlag(ImapCapabilities.Idle);
@@ -33,7 +44,11 @@ namespace p2poolmail
                 UnsubscribeFolderHandlers(folder, handlers);
             }
 
-            folder = await ResolveAndOpenFolderAsync(null, FolderAccess.ReadWrite, token).ConfigureAwait(false);
+            // No re-SELECT here: standard clients keep the folder selected across IDLE
+            // wakes and rely on MailKit applying untagged responses to the live folder
+            // object. A second SELECT per wake just doubles command traffic; if the
+            // connection dropped during the wait, the next command fails and the loop
+            // reconnects with backoff - the recovery path is unchanged.
             if (folder.Count != initialCount)
                 _logger?.Invoke($"Folder changed: {initialCount} → {folder.Count} messages");
 
@@ -93,14 +108,17 @@ namespace p2poolmail
                 {
                     _logger?.Invoke("Folder empty at startup");
                 }
+
+                // Success: remember the watermark for this UIDVALIDITY epoch and do
+                // not re-run bootstrap on later iterations.
+                _skippedExistingUnreadAtStartup = true;
             }
             catch (Exception ex)
             {
+                // Leave _skippedExistingUnreadAtStartup false so the next iteration
+                // retries bootstrapping; marking it done here would leave
+                // _lastProcessedUid null and replay ALL unread messages as "new".
                 _logger?.Invoke($"Failed to initialize last UID: {ex.Message}");
-            }
-            finally
-            {
-                _skippedExistingUnreadAtStartup = true;
             }
         }
     }

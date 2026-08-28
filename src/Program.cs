@@ -159,18 +159,52 @@ namespace p2poolmail
             }
         }
 
-        /// <summary>Callback for new IMAP mail: enqueue a reply email. Must never block, or the IDLE loop stalls.</summary>
+        /// <summary>
+        /// Callback for new IMAP mail: enqueue a status reply. Must never block, or the IDLE loop stalls.
+        /// Provider-friendly: automatic/bounce senders (no-reply, mailer-daemon, ...) never get a
+        /// reply - answering them creates pointless outbound traffic and feeds spam backscatter.
+        /// When [imap_server].reply_allowlist is non-empty, only listed senders are answered.
+        /// </summary>
         private static Task OnNewMailAsync(MimeMessage message)
         {
-            CommonHelper.WriteLine($"IMAP newmail: {message.Subject} from {message.From}");
+            var from = message.From.Mailboxes.FirstOrDefault()?.Address;
+            CommonHelper.WriteLine($"IMAP newmail: {message.Subject} from {from ?? "<unknown>"}");
 
-            if (!string.IsNullOrWhiteSpace(message.Subject))
+            if (string.IsNullOrWhiteSpace(message.Subject))
+                return Task.CompletedTask;
+
+            if (from == null || IsAutoSender(from))
             {
-                var stats = NotifyManager.RequestByEmail();
-                EmailQueue.Enqueue($"{EmailIcons.Info} Reply: your mining status", stats); // fire-and-forget; delivered by the EmailQueue background worker.
+                CommonHelper.WriteLine($"IMAP: skipped auto/bounce sender ({from ?? "no address"}) - no reply sent");
+                return Task.CompletedTask;
             }
 
+            var allowlist = Settings.Current.imap_server.reply_allowlist;
+            if (allowlist is { Length: > 0 } &&
+                !allowlist.Contains(from, StringComparer.OrdinalIgnoreCase))
+            {
+                CommonHelper.WriteLine($"IMAP: sender {from} not in reply_allowlist - no reply sent");
+                return Task.CompletedTask;
+            }
+
+            var stats = NotifyManager.RequestByEmail();
+            EmailQueue.Enqueue($"{EmailIcons.Info} Reply: your mining status", stats); // fire-and-forget; delivered by the EmailQueue background worker.
             return Task.CompletedTask;
+        }
+
+        /// <summary>Matches common automatic-sender local parts that must never be replied to.</summary>
+        private static bool IsAutoSender(string address)
+        {
+            var local = address.Split('@')[0];
+            return local.Equals("no-reply", StringComparison.OrdinalIgnoreCase)
+                || local.Equals("noreply", StringComparison.OrdinalIgnoreCase)
+                || local.Equals("donotreply", StringComparison.OrdinalIgnoreCase)
+                || local.EndsWith("-noreply", StringComparison.OrdinalIgnoreCase)
+                || local.EndsWith("_noreply", StringComparison.OrdinalIgnoreCase)
+                || local.Equals("mailer-daemon", StringComparison.OrdinalIgnoreCase)
+                || local.Equals("postmaster", StringComparison.OrdinalIgnoreCase)
+                || local.StartsWith("bounce", StringComparison.OrdinalIgnoreCase)
+                || local.StartsWith("noreply+", StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>Worker-count polling loop: reads the data-api connection count with debounce/trend detection.</summary>

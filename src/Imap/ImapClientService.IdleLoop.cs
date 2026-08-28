@@ -63,12 +63,19 @@ namespace p2poolmail
 
             _idleTask = Task.Run(async () =>
             {
+                // Consecutive failures drive the reconnect backoff; any successful
+                // iteration resets it so a healthy link keeps reconnecting fast.
+                var consecutiveFailures = 0;
                 while (!token.IsCancellationRequested)
                 {
                     try
                     {
-                        SetState(ImapRunState.Connecting);
+                        // No SetState(Connecting) here: when the connection is still up
+                        // this iteration just waits in IDLE - claiming "Connecting" every
+                        // 9 minutes made the state log flicker meaninglessly. ConnectAsync
+                        // sets Connecting itself when an actual reconnect is needed.
                         await IdleLoopIterationAsync(onNewMessage, token).ConfigureAwait(false);
+                        consecutiveFailures = 0;
                     }
                     catch (OperationCanceledException)
                     {
@@ -77,11 +84,16 @@ namespace p2poolmail
                     }
                     catch (Exception ex)
                     {
+                        // Provider-friendly reconnect: back off exponentially so a persistent
+                        // failure (server down, credentials revoked, network outage) does not
+                        // turn into a reconnect storm every few seconds.
+                        consecutiveFailures++;
                         SetState(ImapRunState.Reconnecting);
-                        _logger?.Invoke($"Idle loop error: {ex.Message}");
+                        var delay = TimeSpan.FromSeconds(Math.Min(5d * Math.Pow(2, Math.Min(consecutiveFailures - 1, 4)), 60d));
+                        _logger?.Invoke($"Idle loop error: {ex.Message} - reconnecting in {delay.TotalSeconds:F0}s");
                         try
                         {
-                            await Task.Delay(TimeSpan.FromSeconds(5), token).ConfigureAwait(false);
+                            await Task.Delay(delay, token).ConfigureAwait(false);
                         }
                         catch
                         {

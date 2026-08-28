@@ -37,13 +37,18 @@ namespace p2poolmail
         private bool _skippedExistingUnreadAtStartup;
         private UniqueId? _lastProcessedUid;
 
-        private TimeSpan _pollInterval = TimeSpan.FromSeconds(5);
+        private TimeSpan _pollInterval = TimeSpan.FromSeconds(60);
         private TimeSpan _idleHeartbeat = TimeSpan.FromMinutes(9);
         private TimeSpan _idleResetInterval = TimeSpan.FromMinutes(9);
         private int _candidateLimit = 5;
-        private TimeSpan _idleRetryDelay = TimeSpan.FromSeconds(2);
         private TimeSpan _idleMaxRetryDelay = TimeSpan.FromSeconds(30);
         private int _idleFailureCount;
+        /// <summary>UIDVALIDITY of INBOX at the time <see cref="_lastProcessedUid"/> was captured. A change invalidates all UIDs.</summary>
+        private uint? _lastUidValidity;
+        /// <summary>Retry bookkeeping for a message that repeatedly fails processing (poison message).</summary>
+        private UniqueId? _stuckUid;
+        private int _stuckUidAttempts;
+        private const int MaxAttemptsPerUid = 3;
 
         public ImapClientService(string host, int port = 993, bool useSsl = true, string? username = null, string? password = null, Action<string>? logger = null, bool ignoreCertificateErrors = false, TimeSpan? idleResetInterval = null, int candidateLimit = 5)
         {
@@ -72,18 +77,6 @@ namespace p2poolmail
 
             _state = state;
             _logger?.Invoke($"IMAP state -> {state}");
-        }
-
-        public TimeSpan IdleRetryDelay
-        {
-            get => _idleRetryDelay;
-            set => _idleRetryDelay = value > TimeSpan.Zero ? value : TimeSpan.FromSeconds(1);
-        }
-
-        public TimeSpan IdleMaxRetryDelay
-        {
-            get => _idleMaxRetryDelay;
-            set => _idleMaxRetryDelay = value > TimeSpan.Zero ? value : TimeSpan.FromSeconds(10);
         }
 
         private static void TryCancel(CancellationTokenSource? cts)

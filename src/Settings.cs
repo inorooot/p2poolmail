@@ -134,12 +134,15 @@ internal sealed partial class Settings
 
     internal sealed class ImapServer
     {
-        public bool enable { get; set; } = true;
+        /// <summary>Opt-in feature: default off so configs without an [imap_server] section never attempt a connection.</summary>
+        public bool enable { get; set; } = false;
         public string host { get; set; } = string.Empty;
         public int port { get; set; }
         public bool useSsl { get; set; }
         public string username { get; set; } = string.Empty;
         public string password { get; set; } = string.Empty;
+        /// <summary>When non-empty, status replies are only sent to these sender addresses (case-insensitive). Keep empty to reply to any human sender.</summary>
+        public string[] reply_allowlist { get; set; } = System.Array.Empty<string>();
     }
 }
 

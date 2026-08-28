@@ -19,7 +19,9 @@ namespace p2poolmail
                 SetState(ImapRunState.Idle);
                 LogIdleSupport("Connected");
             }
-            catch (Exception ex) when (_ignoreCertificateErrors && !_client.IsConnected)
+            // Cancellation must not take the bypass path: with a cancelled token the
+            // retry below would throw immediately and just mask the original reason.
+            catch (Exception ex) when (_ignoreCertificateErrors && !_client.IsConnected && ex is not OperationCanceledException)
             {
                 _logger?.Invoke($"IMAP normal SSL connect failed for {_host}:{_port}, retrying with certificate validation disabled. Error: {ex.Message}");
                 await ReconnectWithCertificateValidationBypassAsync(cancellationToken).ConfigureAwait(false);
@@ -43,6 +45,29 @@ namespace p2poolmail
             if (!string.IsNullOrEmpty(_username))
             {
                 await _client.AuthenticateAsync(_username!, _password!, cancellationToken).ConfigureAwait(false);
+            }
+
+            // Standard-client behavior: announce ourselves via the IMAP ID extension.
+            // Most servers just log it; some providers (163/126/QQ mail) REQUIRE a client
+            // identification before any other command and reject everything with
+            // "Unsafe Login" otherwise.
+            if (_client.Capabilities.HasFlag(ImapCapabilities.Id))
+            {
+                try
+                {
+                    // MailKitLite names this type ImapImplementation (upstream MailKit:
+                    // ImapIdentification); same IMAP ID payload either way.
+                    await _client.IdentifyAsync(new ImapImplementation
+                    {
+                        Name = "p2poolmail",
+                        Version = "1.0",
+                    }, cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    // Identification is advisory - never let it fail the connection.
+                    _logger?.Invoke($"IMAP ID command not accepted by {_host}: {ex.Message}");
+                }
             }
         }
 
@@ -99,8 +124,9 @@ namespace p2poolmail
             }
             catch (Exception ex)
             {
+                // No delay here: the IDLE loop applies its own exponential backoff,
+                // so pacing stays in one place (double delays would just slow recovery).
                 _logger?.Invoke($"Failed to connect to {_host}:{_port}: {ex.Message}");
-                await Task.Delay(TimeSpan.FromSeconds(5), token).ConfigureAwait(false);
                 throw;
             }
         }

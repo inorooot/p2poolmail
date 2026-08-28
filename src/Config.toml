@@ -27,6 +27,7 @@ port = 993                                 # IMAP port
 useSsl = true                              # Enable SSL for the IMAP connection
 username = "receiver@example.com"         # IMAP login username
 password = "YOUR_IMAP_CREDENTIAL"        # Use the credential required by your provider,OAuth2 unsupported
+reply_allowlist = []                     # Sender addresses allowed to get status replies, e.g. ["me@example.com"]. Empty = reply to any non-robot sender
 
 [keepalive]
 enable_remote_ping = false                # Enable periodic requests to a remote URL

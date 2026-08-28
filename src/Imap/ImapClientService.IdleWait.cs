@@ -44,6 +44,17 @@ namespace p2poolmail
                     return;
                 }
 
+                // IdleAsync returns normally in BOTH wake cases (MailKit sends the DONE
+                // for us): a folder event cancelled doneToken, or the heartbeat timer
+                // cancelled idleCts. The doneToken parameter is idleDoneCts from the
+                // caller, separate from idleCts - so the wake reason is distinguishable.
+                if (idleCts.IsCancellationRequested && !doneToken.IsCancellationRequested)
+                {
+                    _logger?.Invoke($"IDLE: heartbeat after {heartbeat} - checking for messages");
+                    _idleFailureCount = 0;
+                    return;
+                }
+
                 _logger?.Invoke("IDLE: received notification from server, checking for messages");
                 _idleFailureCount = 0;
                 _idleFallbackWarned = false;
