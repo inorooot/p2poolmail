@@ -75,7 +75,7 @@ namespace p2poolmail
 
             var workers = stream.Workers; 
             
-            msg.Append(EmailIcons.Workers).Append(" Total worker: ").Append(stream.Connections).Append("\r\n");
+            msg.Append(" Total worker: ").Append(stream.Connections).Append("\r\n");
             //msg.Append("Total hashes: ").Append(stream.TotalHashes);
             msg.Append(" Hashrate_15m: ").Append(stream.Hashrate15m / 1000m).Append(" KH/s").Append("\r\n");
             msg.Append(" Hashrate_1h: ").Append(stream.Hashrate1h / 1000m).Append(" KH/s").Append("\r\n");

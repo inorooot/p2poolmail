@@ -1,5 +1,7 @@
 using System.Buffers;
 using System.Globalization;
+using System.Net;
+using System.Net.Sockets;
 
 namespace p2poolmail;
 
@@ -91,11 +93,55 @@ internal static class NotifyManager
     // ---------- Keepalive: periodic healthchecks.io heartbeat configured under [keepalive] ----------
     private const int KeepaliveRetryCount = 2;
     private const int KeepaliveRetryDelayMs = 2000;
+    /// <summary>Per-address connect timeout for the keepalive dialer. A black-holed route costs only this, not the whole HttpClient timeout.</summary>
+    private const int KeepalivePerAddressTimeoutMs = 5_000;
 
     // Created lazily (after settings are loaded) because the request timeout comes
     // from [keepalive].timeout_seconds. Single shared instance: avoids socket
     // exhaustion from repeated requests.
     private static HttpClient? _keepaliveHttp;
+
+    /// <summary>
+    /// SocketsHttpHandler.ConnectCallback: resolves the target host and dials the
+    /// addresses ourselves (IPv4 first, per-address timeout) instead of letting the
+    /// handler walk them sequentially. Returns the established connection's stream.
+    /// </summary>
+    private static async ValueTask<Stream> KeepaliveConnectCallbackAsync(SocketsHttpConnectionContext ctx, CancellationToken cancellation)
+    {
+        var addresses = await Dns.GetHostAddressesAsync(ctx.DnsEndPoint.Host, cancellation).ConfigureAwait(false);
+
+        // Stable reorder: IPv4 first, everything else (IPv6) after.
+        var ordered = addresses
+            .OrderBy(a => a.AddressFamily == AddressFamily.InterNetworkV6 ? 1 : 0)
+            .ToArray();
+        if (ordered.Length == 0)
+            throw new SocketException((int)SocketError.HostNotFound);
+
+        Exception? lastError = null;
+        foreach (var ip in ordered)
+        {
+            var socket = new Socket(ip.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
+            try
+            {
+                using var perCts = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
+                perCts.CancelAfter(KeepalivePerAddressTimeoutMs);
+                await socket.ConnectAsync(ip, ctx.DnsEndPoint.Port, perCts.Token).ConfigureAwait(false);
+                return new NetworkStream(socket, ownsSocket: true);
+            }
+            catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+            {
+                socket.Dispose();
+                throw;
+            }
+            catch (Exception ex)
+            {
+                socket.Dispose();
+                lastError = ex;
+            }
+        }
+
+        throw lastError ?? new SocketException((int)SocketError.HostNotFound);
+    }
 
     /// <summary>
     /// Sends an HTTP GET to [keepalive].ping_url every interval_minutes until
@@ -120,7 +166,18 @@ internal static class NotifyManager
         var timeoutSeconds = Math.Max(1, cfg.timeout_seconds);
         bool isDown = false;
 
-        _keepaliveHttp = new HttpClient { Timeout = TimeSpan.FromSeconds(timeoutSeconds) };
+        // Custom dialer: hc-ping.com (like many hosts) resolves to IPv6 addresses
+        // that this machine cannot reach (address assigned, no real connectivity).
+        // SocketsHttpHandler dials resolved addresses sequentially, so a black-holed
+        // IPv6 attempt consumed the entire HttpClient timeout and every ping failed,
+        // while a browser succeeded thanks to Happy Eyeballs (parallel IPv4/IPv6 race).
+        // IPv4-first ordering with a per-address timeout reproduces that resilience.
+        var handler = new SocketsHttpHandler
+        {
+            ConnectCallback = KeepaliveConnectCallbackAsync,
+            PooledConnectionLifetime = TimeSpan.FromMinutes(15),
+        };
+        _keepaliveHttp = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(timeoutSeconds) };
 
         CommonHelper.WriteLine($"keepalive: reporting alive every {interval.TotalMinutes:F0} min (timeout={timeoutSeconds}s, retries={KeepaliveRetryCount - 1})");
 
