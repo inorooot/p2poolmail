@@ -69,7 +69,7 @@ namespace p2poolmail
         {
                
             var msg = new StringBuilder();
-            msg.Append($"{EmailIcons.Info} Hi,Instruction received at {DateTime.Now.ToString("HH:mm:ss")}.").Append("\r\n");
+            msg.Append($"Hi,Instruction received at {DateTime.Now.ToString("HH:mm:ss")}.").Append("\r\n");
             var stream = LoadLocalStratum();
             if (stream is null) return string.Empty;
 
