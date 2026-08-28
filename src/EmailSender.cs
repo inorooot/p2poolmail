@@ -1,5 +1,7 @@
 // Copyright (c) 2026 inorooot. MIT License.
 
+using System.Net;
+using System.Net.Sockets;
 using MailKit.Net.Smtp;
 using MailKit.Security;
 using MimeKit;
@@ -17,6 +19,8 @@ internal sealed class EmailSender : IAsyncDisposable
     private static readonly TimeSpan NoOpAfter = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan DisconnectTimeout = TimeSpan.FromSeconds(3);
     private static readonly TimeSpan MinSendInterval = TimeSpan.FromSeconds(1); // default rate limit 1s
+    /// <summary>Per-address connect timeout. A black-holed route costs only this, not the whole send budget.</summary>
+    private const int PerAddressConnectTimeoutMs = 8_000;
 
     private readonly Settings.SMTP _smtp;
     private readonly string _user;
@@ -142,10 +146,13 @@ internal sealed class EmailSender : IAsyncDisposable
         await DisconnectAsync().ConfigureAwait(false);
 
         var client = new SmtpClient { Timeout = 30_000 };
+        var socket = await DialHostAsync(cancellation).ConfigureAwait(false);
         try
         {
             CommonHelper.WriteDebug($"SMTP: connecting to {_smtp.host}:{_smtp.port} (useSsl={_smtp.useSsl})");
-            await client.ConnectAsync(_smtp.host, _smtp.port, SocketOptions(), cancellation).ConfigureAwait(false);
+            // Hand the already-dialed socket to MailKit; _smtp.host is still used
+            // for TLS SNI and certificate validation.
+            await client.ConnectAsync(socket, _smtp.host, _smtp.port, SocketOptions(), cancellation).ConfigureAwait(false);
             if (_auth)
             {
                 await client.AuthenticateAsync(_user, _smtp.password, cancellation).ConfigureAwait(false);
@@ -162,10 +169,65 @@ internal sealed class EmailSender : IAsyncDisposable
         }
         catch (Exception ex)
         {
-            client.Dispose();
+            client.Dispose(); // also closes the wrapped socket
             CommonHelper.WriteWarn($"SMTP: connect failed: {ex.Message}");
             throw;
         }
+    }
+
+    /// <summary>
+    /// Resolves the SMTP host and dials the addresses ourselves instead of letting
+    /// MailKit iterate them. MailKit's internal connect loop has no per-address
+    /// timeout, so one black-holed route (e.g. an IPv6 address assigned but with no
+    /// real connectivity) consumed the entire send timeout and every retry failed
+    /// without ever reaching a working IPv4 address. Here IPv4 is preferred and a
+    /// hanging dial only costs its own slice of the budget.
+    /// </summary>
+    private async Task<Socket> DialHostAsync(CancellationToken cancellation)
+    {
+        var addresses = await Dns.GetHostAddressesAsync(_smtp.host, cancellation).ConfigureAwait(false);
+
+        // Stable reorder: IPv4 first, everything else (IPv6) after.
+        var ordered = addresses
+            .OrderBy(a => a.AddressFamily == AddressFamily.InterNetworkV6 ? 1 : 0)
+            .ToArray();
+        if (ordered.Length == 0)
+            throw new InvalidOperationException($"SMTP host '{_smtp.host}' resolved to no addresses");
+
+        Exception? lastError = null;
+        foreach (var ip in ordered)
+        {
+            var family = ip.AddressFamily;
+            var socket = new Socket(family, SocketType.Stream, ProtocolType.Tcp);
+            try
+            {
+                CommonHelper.WriteDebug($"SMTP: dialing {ip}:{_smtp.port} ({(family == AddressFamily.InterNetwork ? "IPv4" : "IPv6")})");
+                using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
+                cts.CancelAfter(PerAddressConnectTimeoutMs);
+                await socket.ConnectAsync(ip, _smtp.port, cts.Token).ConfigureAwait(false);
+                return socket;
+            }
+            catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+            {
+                socket.Dispose();
+                throw;
+            }
+            catch (OperationCanceledException)
+            {
+                // Per-address timeout only: discard this route and try the next one.
+                socket.Dispose();
+                lastError = new TimeoutException($"connect to {ip} timed out after {PerAddressConnectTimeoutMs / 1000}s");
+                CommonHelper.WriteWarn($"SMTP: dial {ip} timed out after {PerAddressConnectTimeoutMs / 1000}s, trying next address");
+            }
+            catch (Exception ex)
+            {
+                socket.Dispose();
+                lastError = ex;
+                CommonHelper.WriteWarn($"SMTP: dial {ip} failed: {ex.Message}, trying next address");
+            }
+        }
+
+        throw lastError ?? new InvalidOperationException($"could not dial {_smtp.host}:{_smtp.port}");
     }
 
     private async Task<SmtpClient?> TryReuseAsync(CancellationToken cancellation)
