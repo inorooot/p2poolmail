@@ -21,6 +21,25 @@ namespace p2poolmail
 
                 foreach (var uid in candidateUids)
                 {
+                    var alreadyInFlight = false;
+                    lock (_inFlightUids)
+                    {
+                        if (_inFlightUids.Contains(uid))
+                        {
+                            alreadyInFlight = true;
+                        }
+                        else
+                        {
+                            _inFlightUids.Add(uid);
+                        }
+                    }
+
+                    if (alreadyInFlight)
+                    {
+                        _logger?.Invoke($"Skipping duplicate in-flight UID {uid}");
+                        continue;
+                    }
+
                     _logger?.Invoke($"Processing new message: UID {uid} (lastProcessedUid: {_lastProcessedUid}, via {(isIdle ? "IDLE" : "POLL")})");
 
                     try
@@ -73,6 +92,13 @@ namespace p2poolmail
                         _logger?.Invoke($"Error processing UID {uid} (attempt {_stuckUidAttempts}/{MaxAttemptsPerUid}): {ex.GetType().Name} - {ex.Message}");
                         break;
                     }
+                    finally
+                    {
+                        lock (_inFlightUids)
+                        {
+                            _inFlightUids.Remove(uid);
+                        }
+                    }
                 }
             }
             catch (OperationCanceledException)
@@ -85,6 +111,20 @@ namespace p2poolmail
             }
         }
 
+        private static bool IsUidAlreadyProcessed(UniqueId uid, UniqueId? lastProcessedUid, uint? currentUidValidity, uint? lastUidValidity, UniqueId? uidNext)
+        {
+            if (!lastProcessedUid.HasValue)
+                return false;
+
+            if (currentUidValidity.HasValue && lastUidValidity.HasValue && currentUidValidity.Value != lastUidValidity.Value)
+                return false;
+
+            if (uidNext.HasValue && uid.Id >= uidNext.Value.Id)
+                return false;
+
+            return uid.Id <= lastProcessedUid.Value.Id;
+        }
+
         private async Task<List<UniqueId>> GetCandidateUidsAsync(IMailFolder folder, CancellationToken cancellationToken)
         {
             var uidsList = await folder.SearchAsync(SearchQuery.NotSeen, cancellationToken).ConfigureAwait(false);
@@ -92,8 +132,11 @@ namespace p2poolmail
             if (uidsList.Count > 0)
                 _logger?.Invoke($"Found {uidsList.Count} unread messages");
 
+            var uidValidity = folder.UidValidity;
+            var uidNext = folder.UidNext;
+
             return uidsList
-                .Where(u => !_lastProcessedUid.HasValue || u.Id > _lastProcessedUid.Value.Id)
+                .Where(u => !IsUidAlreadyProcessed(u, _lastProcessedUid, uidValidity, _lastUidValidity, uidNext))
                 .OrderBy(u => u.Id)
                 .Take(_candidateLimit)
                 .ToList();

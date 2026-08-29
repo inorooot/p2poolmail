@@ -38,11 +38,16 @@ namespace p2poolmail
         private UniqueId? _lastProcessedUid;
 
         private TimeSpan _pollInterval = TimeSpan.FromSeconds(60);
-        private TimeSpan _idleHeartbeat = TimeSpan.FromMinutes(9);
-        private TimeSpan _idleResetInterval = TimeSpan.FromMinutes(9);
+        // 30s is short enough to detect new mail promptly without a 9-minute gap,
+        // but long enough to avoid busy-looping the IMAP server with a tight wake-up.
+        private TimeSpan _idleHeartbeat = TimeSpan.FromSeconds(30);
+        private TimeSpan _idleResetInterval = TimeSpan.FromSeconds(30);
         private int _candidateLimit = 5;
         private TimeSpan _idleMaxRetryDelay = TimeSpan.FromSeconds(30);
         private int _idleFailureCount;
+        // Guard against re-entrant processing of the same UID if the server emits a
+        // duplicate notification before the prior pass has advanced the watermark.
+        private readonly HashSet<UniqueId> _inFlightUids = new();
         /// <summary>UIDVALIDITY of INBOX at the time <see cref="_lastProcessedUid"/> was captured. A change invalidates all UIDs.</summary>
         private uint? _lastUidValidity;
         /// <summary>Retry bookkeeping for a message that repeatedly fails processing (poison message).</summary>

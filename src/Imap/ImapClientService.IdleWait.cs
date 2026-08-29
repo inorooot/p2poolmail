@@ -50,7 +50,12 @@ namespace p2poolmail
                 // caller, separate from idleCts - so the wake reason is distinguishable.
                 if (idleCts.IsCancellationRequested && !doneToken.IsCancellationRequested)
                 {
+                    // Standard, provider-friendly IDLE wake: the heartbeat expired, not a
+                    // server message. Use a unified NOOP probe before the next round to keep
+                    // the connection fresh without issuing a reconnect storm or keeping a
+                    // stale IDLE alive for too long.
                     _logger?.Invoke($"IDLE: heartbeat after {heartbeat} - checking for messages");
+                    _ = await TryNoOpAsync(cancellationToken, "IDLE heartbeat").ConfigureAwait(false);
                     _idleFailureCount = 0;
                     return;
                 }
@@ -66,6 +71,31 @@ namespace p2poolmail
             catch (Exception ex)
             {
                 await HandleIdleFailureAsync(ex, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        private async Task<bool> TryNoOpAsync(CancellationToken token, string context)
+        {
+            try
+            {
+                await _client.NoOpAsync(token).ConfigureAwait(false);
+                return true;
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                SetState(ImapRunState.Reconnecting);
+                _logger?.Invoke($"{context}: NOOP failed ({ex.GetType().Name}), reconnecting");
+                try
+                {
+                    if (_client.IsConnected)
+                        _client.Disconnect(true);
+                }
+                catch { }
+                return false;
             }
         }
 
@@ -85,25 +115,7 @@ namespace p2poolmail
                 _idleFallbackWarned = true;
             }
 
-            try
-            {
-                await _client.NoOpAsync(token).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (token.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (Exception noOpEx)
-            {
-                _logger?.Invoke($"IDLE: connection lost ({noOpEx.GetType().Name}), will reconnect");
-                try
-                {
-                    if (_client.IsConnected)
-                        _client.Disconnect(true);
-                }
-                catch { }
-            }
-
+            _ = await TryNoOpAsync(token, "IDLE recovery").ConfigureAwait(false);
             await Task.Delay(delay, token).ConfigureAwait(false);
         }
 
@@ -115,14 +127,10 @@ namespace p2poolmail
                 _idleFallbackWarned = true;
             }
 
+            SetState(ImapRunState.Polling);
             _idleFailureCount = 0;
 
-            try
-            {
-                await _client.NoOpAsync(token).ConfigureAwait(false);
-            }
-            catch { }
-
+            _ = await TryNoOpAsync(token, "POLL").ConfigureAwait(false);
             await Task.Delay(_pollInterval, token).ConfigureAwait(false);
         }
 

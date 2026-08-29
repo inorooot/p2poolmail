@@ -175,6 +175,39 @@ public class ImapClientServiceTests : IDisposable
         Assert.Equal(Disconnected, state);
     }
 
+    [Fact]
+    public void UidProcessing_RejectsOlderUidInSameValidity()
+    {
+        var alreadyProcessed = InvokeIsUidAlreadyProcessed(
+            uid: new UniqueId(100),
+            lastProcessedUid: new UniqueId(120),
+            currentUidValidity: 42,
+            lastUidValidity: 42,
+            uidNext: new UniqueId(130));
+
+        Assert.True(alreadyProcessed);
+    }
+
+    [Fact]
+    public void UidProcessing_AllowsNewerUidWhenUidNextMovesAhead()
+    {
+        var alreadyProcessed = InvokeIsUidAlreadyProcessed(
+            uid: new UniqueId(125),
+            lastProcessedUid: new UniqueId(120),
+            currentUidValidity: 42,
+            lastUidValidity: 42,
+            uidNext: new UniqueId(130));
+
+        Assert.False(alreadyProcessed);
+    }
+
+    private static bool InvokeIsUidAlreadyProcessed(UniqueId uid, UniqueId? lastProcessedUid, uint? currentUidValidity, uint? lastUidValidity, UniqueId? uidNext)
+    {
+        var method = typeof(ImapClientService).GetMethod("IsUidAlreadyProcessed", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(method);
+        return (bool)method!.Invoke(null, [uid, lastProcessedUid, currentUidValidity, lastUidValidity, uidNext])!;
+    }
+
     // ========== Default Values Tests ==========
 
     [Fact]
@@ -187,12 +220,12 @@ public class ImapClientServiceTests : IDisposable
     }
 
     [Fact]
-    public void Default_IdleHeartbeat_Is9Minutes()
+    public void Default_IdleHeartbeat_Is30Seconds()
     {
         var service = new ImapClientService("imap.example.com", logger: _logger);
 
         var idleHeartbeatField = typeof(ImapClientService).GetField("_idleHeartbeat", BindingFlags.NonPublic | BindingFlags.Instance);
-        Assert.Equal(TimeSpan.FromMinutes(9), idleHeartbeatField?.GetValue(service));
+        Assert.Equal(TimeSpan.FromSeconds(30), idleHeartbeatField?.GetValue(service));
     }
 
     [Fact]
