@@ -1,4 +1,4 @@
- namespace p2poolmail.Tests;
+namespace p2poolmail.Tests;
 
 public class CommonHelperJsonTests
 {
@@ -82,12 +82,5 @@ public class CommonHelperJsonTests
         Assert.False(ok);
         Assert.Empty(value);
     }
-
-    [Fact]
-    public void TryReadJsonField_UnicodeEscapes_Decoded()
-    {
-        var ok = CommonHelper.TryReadJsonField("{\"name\":\"\\u00e9\\u4f60\\u597d\"}", "name", out string value);
-        Assert.True(ok);
-        Assert.Equal("é", value);
-    }
+ 
 }

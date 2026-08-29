@@ -1,6 +1,6 @@
 using p2poolmail;
 
-namespace p2poolmail.Tests;
+namespace Tests;
 
 public class AhoCorasickTreeTests
 {

@@ -3,7 +3,7 @@ using MailKit.Net.Imap;
 using p2poolmail;
 using System.Reflection;
 
-namespace p2poolmail.Tests;
+namespace Tests;
 
 /// <summary>
 /// Unit tests for core IMAP client service functionality: construction,

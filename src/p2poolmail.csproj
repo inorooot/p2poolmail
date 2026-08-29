@@ -8,7 +8,7 @@
     <PublishAot>true</PublishAot>
   </PropertyGroup>
   <ItemGroup>
-    <InternalsVisibleTo Include="p2poolmail.Tests" />
+    <InternalsVisibleTo Include="Tests" />
   </ItemGroup>
   <ItemGroup>
     <Content Include="Config.toml">

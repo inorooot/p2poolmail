@@ -1,4 +1,4 @@
 <Solution>
   <Project Path="src/p2poolmail.csproj" />
-  <Project Path="tests/p2poolmail.Tests/p2poolmail.Tests.csproj" />
+  <Project Path="tests/Tests.csproj" />
 </Solution>

@@ -1,7 +1,7 @@
 using System.Reflection;
 using p2poolmail;
 
-namespace p2poolmail.Tests;
+namespace Tests;
 
 /// <summary>
 /// Tests the alert latch/recovery state machine of Notification. The latched

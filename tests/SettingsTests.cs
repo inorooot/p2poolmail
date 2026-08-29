@@ -1,6 +1,6 @@
 using p2poolmail;
 
-namespace p2poolmail.Tests;
+namespace Tests;
 
 // <summary>Tests TOML config loading with a temporary config file.</summary>
 public class SettingsTests : IDisposable

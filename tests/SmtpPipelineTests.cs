@@ -3,7 +3,7 @@ using MimeKit;
 using p2poolmail;
 using System.Reflection;
 
-namespace p2poolmail.Tests;
+namespace Tests;
 
 /// <summary>
 /// Unit tests for the SMTP pipeline: configuration validation, message
