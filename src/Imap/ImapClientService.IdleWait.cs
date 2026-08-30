@@ -18,16 +18,16 @@ namespace p2poolmail
             await WaitWithPollingAsync(token).ConfigureAwait(false);
         }
 
-        private async Task WaitWithIdleAsync(IMailFolder folder, CancellationToken doneToken, CancellationToken cancellationToken, TimeSpan? heartbeatOverride = null)
+        private async Task WaitWithIdleAsync(IMailFolder folder, CancellationToken doneToken, CancellationToken cancellationToken, TimeSpan? heartbeat = null)
         {
-            var heartbeat = heartbeatOverride ?? _idleResetInterval;
+            var idleTimeout = heartbeat ?? _idleHeartbeat;
 
             try
             {
-                _logger?.Invoke($"IDLE: entering idle mode on folder {folder.FullName} ({_host}:{_port}), heartbeat={heartbeat}");
+                _logger?.Invoke($"IDLE: entering idle mode on folder {folder.FullName} ({_host}:{_port}), heartbeat={idleTimeout}");
 
                 using var idleCts = CancellationTokenSource.CreateLinkedTokenSource(doneToken, cancellationToken);
-                idleCts.CancelAfter(heartbeat);
+                idleCts.CancelAfter(idleTimeout);
 
                 try
                 {
@@ -38,7 +38,7 @@ namespace p2poolmail
                     if (!doneToken.IsCancellationRequested)
                     {
                         // Heartbeat expired, not a server event.
-                        _logger?.Invoke($"IDLE: heartbeat after {heartbeat} - checking for messages");
+                        _logger?.Invoke($"IDLE: heartbeat after {idleTimeout} - checking for messages");
                         _ = await TryNoOpAsync(cancellationToken, "IDLE heartbeat").ConfigureAwait(false);
                         _idleFailureCount = 0;
                         return;
@@ -69,7 +69,7 @@ namespace p2poolmail
                     else
                     {
                         // Heartbeat expired.
-                        _logger?.Invoke($"IDLE: heartbeat after {heartbeat} (via exception) - checking for messages");
+                        _logger?.Invoke($"IDLE: heartbeat after {idleTimeout} (via exception) - checking for messages");
                         _ = await TryNoOpAsync(cancellationToken, "IDLE heartbeat").ConfigureAwait(false);
                         _idleFailureCount = 0;
                     }

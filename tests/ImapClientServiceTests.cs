@@ -135,17 +135,15 @@ public class ImapClientServiceTests : IDisposable
     }
 
     [Fact]
-    public void IdleResetInterval_OverridesHeartbeat()
+    public void IdleHeartbeat_OverridesDefault()
     {
         var service = new ImapClientService("imap.example.com",
-            idleResetInterval: TimeSpan.FromMinutes(5),
+            idleHeartbeat: TimeSpan.FromMinutes(5),
             logger: _logger);
 
         var idleHeartbeatField = typeof(ImapClientService).GetField("_idleHeartbeat", BindingFlags.NonPublic | BindingFlags.Instance);
-        var idleResetIntervalField = typeof(ImapClientService).GetField("_idleResetInterval", BindingFlags.NonPublic | BindingFlags.Instance);
 
         Assert.Equal(TimeSpan.FromMinutes(5), idleHeartbeatField?.GetValue(service));
-        Assert.Equal(TimeSpan.FromMinutes(5), idleResetIntervalField?.GetValue(service));
     }
 
     [Fact]
@@ -220,12 +218,12 @@ public class ImapClientServiceTests : IDisposable
     }
 
     [Fact]
-    public void Default_IdleHeartbeat_Is30Seconds()
+    public void Default_IdleHeartbeat_Is600Seconds()
     {
         var service = new ImapClientService("imap.example.com", logger: _logger);
 
         var idleHeartbeatField = typeof(ImapClientService).GetField("_idleHeartbeat", BindingFlags.NonPublic | BindingFlags.Instance);
-        Assert.Equal(TimeSpan.FromSeconds(30), idleHeartbeatField?.GetValue(service));
+        Assert.Equal(TimeSpan.FromSeconds(600), idleHeartbeatField?.GetValue(service));
     }
 
     [Fact]

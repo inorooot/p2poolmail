@@ -37,11 +37,11 @@ namespace p2poolmail
         private bool _skippedExistingUnreadAtStartup;
         private UniqueId? _lastProcessedUid;
 
-        private TimeSpan _pollInterval = TimeSpan.FromSeconds(60);
-        // 30s is short enough to detect new mail promptly without a 9-minute gap,
-        // but long enough to avoid busy-looping the IMAP server with a tight wake-up.
+        private TimeSpan _pollInterval = TimeSpan.FromSeconds(60); // IF NO IDLE USE POLLING Interval
+        // 600s (10 minutes) is a provider-friendly heartbeat that keeps the connection
+        // alive without busy-looping the server. If the server does not push EXISTS
+        // during IDLE, new-mail detection is bounded by this interval.
         private TimeSpan _idleHeartbeat = TimeSpan.FromSeconds(600);
-        private TimeSpan _idleResetInterval = TimeSpan.FromSeconds(30);
         private int _candidateLimit = 5;
         private TimeSpan _idleMaxRetryDelay = TimeSpan.FromSeconds(30);
         private int _idleFailureCount;
@@ -55,7 +55,7 @@ namespace p2poolmail
         private int _stuckUidAttempts;
         private const int MaxAttemptsPerUid = 3;
 
-        public ImapClientService(string host, int port = 993, bool useSsl = true, string? username = null, string? password = null, Action<string>? logger = null, bool ignoreCertificateErrors = false, TimeSpan? idleResetInterval = null, int candidateLimit = 5)
+        public ImapClientService(string host, int port = 993, bool useSsl = true, string? username = null, string? password = null, Action<string>? logger = null, bool ignoreCertificateErrors = false, TimeSpan? idleHeartbeat = null, int candidateLimit = 5)
         {
             _host = host ?? throw new ArgumentNullException(nameof(host));
             _port = port;
@@ -65,11 +65,8 @@ namespace p2poolmail
             _logger = logger;
             _ignoreCertificateErrors = ignoreCertificateErrors;
 
-            if (idleResetInterval.HasValue)
-            {
-                _idleResetInterval = idleResetInterval.Value;
-                _idleHeartbeat = idleResetInterval.Value;
-            }
+            if (idleHeartbeat.HasValue)
+                _idleHeartbeat = idleHeartbeat.Value;
 
             _candidateLimit = Math.Max(1, candidateLimit);
             _client = CreateClient();
