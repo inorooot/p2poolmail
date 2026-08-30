@@ -32,37 +32,48 @@ namespace p2poolmail
                 try
                 {
                     await _client.IdleAsync(idleCts.Token, cancellationToken).ConfigureAwait(false);
+
+                    // IdleAsync returned normally - check WHY it returned.
+                    // It returns normally when the heartbeat timer cancels idleCts.
+                    if (!doneToken.IsCancellationRequested)
+                    {
+                        // Heartbeat expired, not a server event.
+                        _logger?.Invoke($"IDLE: heartbeat after {heartbeat} - checking for messages");
+                        _ = await TryNoOpAsync(cancellationToken, "IDLE heartbeat").ConfigureAwait(false);
+                        _idleFailureCount = 0;
+                        return;
+                    }
+
+                    // doneToken was cancelled by a server event (CountChanged etc.)
+                    _logger?.Invoke("IDLE: received notification from server, checking for messages");
+                    _idleFailureCount = 0;
+                    _idleFallbackWarned = false;
+                    return;
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
+                    // External cancellation (shutdown).
                     throw;
                 }
                 catch (OperationCanceledException)
                 {
-                    _logger?.Invoke($"IDLE: heartbeat/done triggered after {heartbeat}");
-                    _idleFailureCount = 0;
-                    return;
+                    // IdleAsync threw OCE because idleCts was cancelled.
+                    // Determine the cause: doneToken (server event) or heartbeat timer.
+                    if (doneToken.IsCancellationRequested)
+                    {
+                        // Server pushed an event (EXISTS, EXPUNGE, etc.)
+                        _logger?.Invoke("IDLE: received notification from server (via exception), checking for messages");
+                        _idleFailureCount = 0;
+                        _idleFallbackWarned = false;
+                    }
+                    else
+                    {
+                        // Heartbeat expired.
+                        _logger?.Invoke($"IDLE: heartbeat after {heartbeat} (via exception) - checking for messages");
+                        _ = await TryNoOpAsync(cancellationToken, "IDLE heartbeat").ConfigureAwait(false);
+                        _idleFailureCount = 0;
+                    }
                 }
-
-                // IdleAsync returns normally in BOTH wake cases (MailKit sends the DONE
-                // for us): a folder event cancelled doneToken, or the heartbeat timer
-                // cancelled idleCts. The doneToken parameter is idleDoneCts from the
-                // caller, separate from idleCts - so the wake reason is distinguishable.
-                if (idleCts.IsCancellationRequested && !doneToken.IsCancellationRequested)
-                {
-                    // Standard, provider-friendly IDLE wake: the heartbeat expired, not a
-                    // server message. Use a unified NOOP probe before the next round to keep
-                    // the connection fresh without issuing a reconnect storm or keeping a
-                    // stale IDLE alive for too long.
-                    _logger?.Invoke($"IDLE: heartbeat after {heartbeat} - checking for messages");
-                    _ = await TryNoOpAsync(cancellationToken, "IDLE heartbeat").ConfigureAwait(false);
-                    _idleFailureCount = 0;
-                    return;
-                }
-
-                _logger?.Invoke("IDLE: received notification from server, checking for messages");
-                _idleFailureCount = 0;
-                _idleFallbackWarned = false;
             }
             catch (OperationCanceledException)
             {

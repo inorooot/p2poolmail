@@ -40,7 +40,7 @@ namespace p2poolmail
         private TimeSpan _pollInterval = TimeSpan.FromSeconds(60);
         // 30s is short enough to detect new mail promptly without a 9-minute gap,
         // but long enough to avoid busy-looping the IMAP server with a tight wake-up.
-        private TimeSpan _idleHeartbeat = TimeSpan.FromSeconds(30);
+        private TimeSpan _idleHeartbeat = TimeSpan.FromSeconds(600);
         private TimeSpan _idleResetInterval = TimeSpan.FromSeconds(30);
         private int _candidateLimit = 5;
         private TimeSpan _idleMaxRetryDelay = TimeSpan.FromSeconds(30);
