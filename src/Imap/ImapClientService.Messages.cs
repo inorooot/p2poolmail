@@ -11,95 +11,15 @@ namespace p2poolmail
         {
             try
             {
-                var candidateUids = await GetCandidateUidsAsync(folder, cancellationToken).ConfigureAwait(false);
-                if (candidateUids.Count == 0)
+                var latestUid = await GetLatestUnreadUidAsync(folder, cancellationToken).ConfigureAwait(false);
+                if (!latestUid.HasValue)
                 {
                     if (!_lastProcessedUid.HasValue)
-                        _logger?.Invoke("No new messages (initialization mode)");
+                        _logger?.Invoke("No unread messages (initialization)");
                     return;
                 }
 
-                foreach (var uid in candidateUids)
-                {
-                    var alreadyInFlight = false;
-                    lock (_inFlightUids)
-                    {
-                        if (_inFlightUids.Contains(uid))
-                        {
-                            alreadyInFlight = true;
-                        }
-                        else
-                        {
-                            _inFlightUids.Add(uid);
-                        }
-                    }
-
-                    if (alreadyInFlight)
-                    {
-                        _logger?.Invoke($"Skipping duplicate in-flight UID {uid}");
-                        continue;
-                    }
-
-                    _logger?.Invoke($"Processing new message: UID {uid} (lastProcessedUid: {_lastProcessedUid}, via {(isIdle ? "IDLE" : "POLL")})");
-
-                    try
-                    {
-                        var message = await folder.GetMessageAsync(uid, cancellationToken).ConfigureAwait(false);
-                        _logger?.Invoke($"Calling onNewMessage callback for: {message.Subject}");
-                        await onNewMessage(message).ConfigureAwait(false);
-
-                        // Advance the watermark BEFORE flagging as seen: the callback
-                        // already fired (a reply was enqueued), so a failed flag write
-                        // must not re-run it next iteration - that would send a
-                        // duplicate reply. The message simply stays unread on the
-                        // server, which is harmless.
-                        _lastProcessedUid = uid;
-                        _stuckUid = null;
-                        _stuckUidAttempts = 0;
-
-                        // Mark as seen with silent=true (RFC 3501 §6.4.6): the server
-                        // should NOT send an untagged FETCH response, reducing traffic.
-                        // This is safe because we already have the message content.
-                        await folder.AddFlagsAsync([uid], MessageFlags.Seen, silent: true, cancellationToken).ConfigureAwait(false);
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        throw;
-                    }
-                    catch (Exception ex)
-                    {
-                        // A message that repeatedly cannot be fetched/replied/flagged (e.g.
-                        // expunged mid-flight, malformed MIME) must not stall the queue
-                        // forever: after MaxAttemptsPerUid strikes we advance the watermark
-                        // past it (it stays unread on the server) so newer mail still flows.
-                        if (uid == _stuckUid)
-                            _stuckUidAttempts++;
-                        else
-                        {
-                            _stuckUid = uid;
-                            _stuckUidAttempts = 1;
-                        }
-
-                        if (_stuckUidAttempts >= MaxAttemptsPerUid)
-                        {
-                            _logger?.Invoke($"ERROR: UID {uid} failed {_stuckUidAttempts} times ({ex.GetType().Name}: {ex.Message}) - skipping to keep newer mail flowing");
-                            _lastProcessedUid = uid;
-                            _stuckUid = null;
-                            _stuckUidAttempts = 0;
-                            continue;
-                        }
-
-                        _logger?.Invoke($"Error processing UID {uid} (attempt {_stuckUidAttempts}/{MaxAttemptsPerUid}): {ex.GetType().Name} - {ex.Message}");
-                        break;
-                    }
-                    finally
-                    {
-                        lock (_inFlightUids)
-                        {
-                            _inFlightUids.Remove(uid);
-                        }
-                    }
-                }
+                await ProcessMessageAsync(folder, latestUid.Value, onNewMessage, cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -111,35 +31,81 @@ namespace p2poolmail
             }
         }
 
-        private static bool IsUidAlreadyProcessed(UniqueId uid, UniqueId? lastProcessedUid, uint? currentUidValidity, uint? lastUidValidity, UniqueId? uidNext)
+        private async Task ProcessMessageAsync(IMailFolder folder, UniqueId uid, Func<MimeMessage, Task> onNewMessage, CancellationToken cancellationToken)
         {
-            if (!lastProcessedUid.HasValue)
-                return false;
+            if (_inFlightUid == uid)
+            {
+                _logger?.Invoke($"Skipping duplicate in-flight UID {uid}");
+                return;
+            }
 
-            if (currentUidValidity.HasValue && lastUidValidity.HasValue && currentUidValidity.Value != lastUidValidity.Value)
-                return false;
+            _inFlightUid = uid;
 
-            if (uidNext.HasValue && uid.Id >= uidNext.Value.Id)
-                return false;
+            try
+            {
+                _logger?.Invoke($"Processing message: UID {uid} (lastProcessed: {_lastProcessedUid})");
+                var message = await folder.GetMessageAsync(uid, cancellationToken).ConfigureAwait(false);
+                _logger?.Invoke($"Callback for: {message.Subject}");
+                await onNewMessage(message).ConfigureAwait(false);
 
-            return uid.Id <= lastProcessedUid.Value.Id;
+                // Advance watermark before marking as seen:
+                // if flagging fails, at least we won't replay the message.
+                _lastProcessedUid = uid;
+                await folder.AddFlagsAsync([uid], MessageFlags.Seen, silent: true, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger?.Invoke($"Error processing UID {uid}: {ex.GetType().Name} - {ex.Message}");
+            }
+            finally
+            {
+                _inFlightUid = null;
+            }
         }
 
-        private async Task<List<UniqueId>> GetCandidateUidsAsync(IMailFolder folder, CancellationToken cancellationToken)
+        private async Task<UniqueId?> GetLatestUnreadUidAsync(IMailFolder folder, CancellationToken cancellationToken)
         {
-            var uidsList = await folder.SearchAsync(SearchQuery.NotSeen, cancellationToken).ConfigureAwait(false);
+            var unreadUids = await folder.SearchAsync(SearchQuery.NotSeen, cancellationToken).ConfigureAwait(false);
 
-            if (uidsList.Count > 0)
-                _logger?.Invoke($"Found {uidsList.Count} unread messages");
+            if (unreadUids.Count == 0)
+                return null;
 
-            var uidValidity = folder.UidValidity;
-            var uidNext = folder.UidNext;
+            if (!_lastUidValidity.HasValue || folder.UidValidity == _lastUidValidity.Value)
+            {
+                _lastUidValidity = folder.UidValidity;
+                return FindLatestUid(unreadUids);
+            }
 
-            return uidsList
-                .Where(u => !IsUidAlreadyProcessed(u, _lastProcessedUid, uidValidity, _lastUidValidity, uidNext))
-                .OrderBy(u => u.Id)
-                .Take(_candidateLimit)
-                .ToList();
+            // UIDVALIDITY changed - reset state and start fresh
+            _logger?.Invoke($"UIDVALIDITY changed ({_lastUidValidity.Value} → {folder.UidValidity}) - resetting watermark");
+            _lastProcessedUid = null;
+            _lastUidValidity = folder.UidValidity;
+            return FindLatestUid(unreadUids);
         }
+
+        private UniqueId? FindLatestUid(IEnumerable<UniqueId> uids)
+        {
+            UniqueId? latest = null;
+            uint maxId = _lastProcessedUid?.Id ?? 0;
+
+            foreach (var uid in uids)
+            {
+                if (uid.Id > maxId)
+                {
+                    maxId = uid.Id;
+                    latest = uid;
+                }
+            }
+
+            if (latest.HasValue)
+                _logger?.Invoke($"Found latest unread: UID {latest}");
+
+            return latest;
+        }
+
     }
 }

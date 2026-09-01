@@ -7,6 +7,11 @@ namespace p2poolmail
     /// <summary>One IDLE iteration of <see cref="ImapClientService"/>: open folder, wait for mail, folder events, UID bootstrap.</summary>
     public partial class ImapClientService
     {
+        /// <summary>Container for folder event handlers with clear names.</summary>
+        private record FolderEventHandlers(
+            EventHandler<EventArgs> CountChanged,
+            EventHandler<MessageEventArgs> MessageExpunged,
+            EventHandler<MessageFlagsChangedEventArgs> MessageFlagsChanged);
         private async Task IdleLoopIterationAsync(Func<MimeMessage, Task> onNewMessage, CancellationToken token)
         {
             if (!_client.IsConnected)
@@ -15,77 +20,74 @@ namespace p2poolmail
             var folder = await ResolveAndOpenFolderAsync(null, FolderAccess.ReadWrite, token).ConfigureAwait(false);
             var initialCount = folder.Count;
 
-            // UIDs are only comparable within one UIDVALIDITY epoch. When the server
-            // changes it (folder recreated, migration), old UIDs would make every new
-            // message look "already processed" - reset the watermark and re-bootstrap.
-            if (_lastUidValidity.HasValue && folder.UidValidity != _lastUidValidity.Value)
-            {
-                _logger?.Invoke($"IMAP UIDVALIDITY changed ({_lastUidValidity.Value} -> {folder.UidValidity}) - resetting last processed UID");
-                _lastProcessedUid = null;
-                _skippedExistingUnreadAtStartup = false;
-            }
-            _lastUidValidity = folder.UidValidity;
-
+            CheckAndResetUidValidity(folder);
             await InitializeLastUidIfNeededAsync(folder).ConfigureAwait(false);
 
+            // Recovery sync: after a network blip the server may have queued new mail
+            // while no IDLE event reached us. Do one explicit scan immediately after
+            // reconnecting so the latest unread message is not silently missed.
             var supportsIdle = _client.Capabilities.HasFlag(ImapCapabilities.Idle);
-            using var idleDoneCts = new CancellationTokenSource();
-            var sessionId = Guid.NewGuid().ToString("N")[..8];
-            _logger?.Invoke($"[{sessionId}] IdleLoopIteration start: folder={folder.FullName}, count={folder.Count}, unread={folder.Unread}");
+            await CheckAndProcessNewMessageAsync(folder, supportsIdle, onNewMessage, token).ConfigureAwait(false);
 
-            var handlers = SubscribeFolderHandlers(folder, idleDoneCts, sessionId);
+            var sessionId = StartMailCheckSession(folder);
+            using var folderEventToken = new CancellationTokenSource();
+            var handlers = SubscribeFolderHandlers(folder, folderEventToken, sessionId);
 
             try
             {
-                await WaitForMailAsync(folder, supportsIdle, token, idleDoneCts.Token, sessionId).ConfigureAwait(false);
+                await WaitForMailAsync(folder, supportsIdle, token, folderEventToken.Token, sessionId).ConfigureAwait(false);
             }
             finally
             {
                 UnsubscribeFolderHandlers(folder, handlers);
             }
 
-            // No re-SELECT here: standard clients keep the folder selected across IDLE
-            // wakes and rely on MailKit applying untagged responses to the live folder
-            // object. A second SELECT per wake just doubles command traffic; if the
-            // connection dropped during the wait, the next command fails and the loop
-            // reconnects with backoff - the recovery path is unchanged.
-            if (folder.Count != initialCount)
-                _logger?.Invoke($"Folder changed: {initialCount} → {folder.Count} messages");
-
+            LogFolderChange(folder, initialCount);
             await CheckAndProcessNewMessageAsync(folder, supportsIdle, onNewMessage, token).ConfigureAwait(false);
         }
 
-        private (EventHandler<EventArgs> CountChanged, EventHandler<MessageEventArgs> MessageExpunged, EventHandler<MessageFlagsChangedEventArgs> MessageFlagsChanged) SubscribeFolderHandlers(IMailFolder folder, CancellationTokenSource idleDoneCts, string sessionId)
+        private FolderEventHandlers SubscribeFolderHandlers(IMailFolder folder, CancellationTokenSource folderEventToken, string sessionId)
         {
-            void CancelIdleOnEvent(string eventName, string details)
+            void LogAndCancelOnEvent(string eventName, string details)
             {
                 try
                 {
-                    _logger?.Invoke($"[{sessionId}] Folder.{eventName} event: {details}");
-                    TryCancel(idleDoneCts);
+                    _logger?.Invoke($"[{sessionId}] Folder.{eventName}: {details}");
+                    TryCancel(folderEventToken);
                 }
                 catch (Exception ex)
                 {
-                    _logger?.Invoke($"[{sessionId}] {eventName} handler error: {ex.Message}");
+                    _logger?.Invoke($"[{sessionId}] Error handling {eventName}: {ex.Message}");
                 }
             }
 
-            EventHandler<EventArgs> countChangedHandler = (_, _) => CancelIdleOnEvent("CountChanged", $"Count={folder.Count}, Unread={folder.Unread}");
-            EventHandler<MessageEventArgs> messageExpungedHandler = (_, e) => CancelIdleOnEvent("MessageExpunged", $"Index={e.Index}");
-            EventHandler<MessageFlagsChangedEventArgs> flagsChangedHandler = (_, e) => CancelIdleOnEvent("MessageFlagsChanged", $"Index={e.Index}, Flags={e.Flags}");
+            EventHandler<EventArgs> countChangedHandler = (_, _) => 
+                LogAndCancelOnEvent("CountChanged", $"Count={folder.Count}, Unread={folder.Unread}");
+            
+            EventHandler<MessageEventArgs> messageExpungedHandler = (_, e) => 
+                LogAndCancelOnEvent("MessageExpunged", $"Index={e.Index}");
+            
+            EventHandler<MessageFlagsChangedEventArgs> flagsChangedHandler = (_, e) => 
+                LogAndCancelOnEvent("MessageFlagsChanged", $"Index={e.Index}, Flags={e.Flags}");
 
             folder.CountChanged += countChangedHandler;
             folder.MessageExpunged += messageExpungedHandler;
             folder.MessageFlagsChanged += flagsChangedHandler;
 
-            return (countChangedHandler, messageExpungedHandler, flagsChangedHandler);
+            return new FolderEventHandlers(countChangedHandler, messageExpungedHandler, flagsChangedHandler);
         }
 
-        private static void UnsubscribeFolderHandlers(IMailFolder folder, (EventHandler<EventArgs> CountChanged, EventHandler<MessageEventArgs> MessageExpunged, EventHandler<MessageFlagsChangedEventArgs> MessageFlagsChanged) handlers)
+        private void UnsubscribeFolderHandlers(IMailFolder folder, FolderEventHandlers handlers)
         {
-            try { folder.CountChanged -= handlers.CountChanged; } catch { }
-            try { folder.MessageExpunged -= handlers.MessageExpunged; } catch { }
-            try { folder.MessageFlagsChanged -= handlers.MessageFlagsChanged; } catch { }
+            UnsubscribeEvent(() => folder.CountChanged -= handlers.CountChanged, "CountChanged");
+            UnsubscribeEvent(() => folder.MessageExpunged -= handlers.MessageExpunged, "MessageExpunged");
+            UnsubscribeEvent(() => folder.MessageFlagsChanged -= handlers.MessageFlagsChanged, "MessageFlagsChanged");
+        }
+
+        private void UnsubscribeEvent(Action action, string eventName)
+        {
+            try { action(); }
+            catch (Exception ex) { _logger?.Invoke($"Failed to unsubscribe from {eventName}: {ex.Message}"); }
         }
 
         private async Task InitializeLastUidIfNeededAsync(IMailFolder folder)
@@ -109,17 +111,42 @@ namespace p2poolmail
                     _logger?.Invoke("Folder empty at startup");
                 }
 
-                // Success: remember the watermark for this UIDVALIDITY epoch and do
-                // not re-run bootstrap on later iterations.
                 _skippedExistingUnreadAtStartup = true;
             }
             catch (Exception ex)
             {
-                // Leave _skippedExistingUnreadAtStartup false so the next iteration
-                // retries bootstrapping; marking it done here would leave
-                // _lastProcessedUid null and replay ALL unread messages as "new".
                 _logger?.Invoke($"Failed to initialize last UID: {ex.Message}");
             }
+        }
+
+        private void CheckAndResetUidValidity(IMailFolder folder)
+        {
+            // UIDs are only comparable within one UIDVALIDITY epoch.
+            // When the server changes it (folder recreated, migration),
+            // old UIDs would make every new message look "already processed" - reset.
+            if (!_lastUidValidity.HasValue || folder.UidValidity == _lastUidValidity.Value)
+            {
+                _lastUidValidity = folder.UidValidity;
+                return;
+            }
+
+            _logger?.Invoke($"UIDVALIDITY changed ({_lastUidValidity.Value} → {folder.UidValidity}) - resetting processing state");
+            _lastProcessedUid = null;
+            _skippedExistingUnreadAtStartup = false;
+            _lastUidValidity = folder.UidValidity;
+        }
+
+        private string StartMailCheckSession(IMailFolder folder)
+        {
+            var sessionId = Guid.NewGuid().ToString("N")[..8];
+            _logger?.Invoke($"[{sessionId}] Starting mail check: folder={folder.FullName}, count={folder.Count}, unread={folder.Unread}");
+            return sessionId;
+        }
+
+        private void LogFolderChange(IMailFolder folder, int initialCount)
+        {
+            if (folder.Count != initialCount)
+                _logger?.Invoke($"Folder changed: {initialCount} → {folder.Count} messages");
         }
     }
 }

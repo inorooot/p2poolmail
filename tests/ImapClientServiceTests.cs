@@ -116,23 +116,7 @@ public class ImapClientServiceTests : IDisposable
 
     // ========== Core Configuration Tests ==========
 
-    [Fact]
-    public void CandidateLimit_EnforcesMinimumOfOne()
-    {
-        var service = new ImapClientService("imap.example.com", candidateLimit: 0, logger: _logger);
-
-        var candidateLimitField = typeof(ImapClientService).GetField("_candidateLimit", BindingFlags.NonPublic | BindingFlags.Instance);
-        Assert.Equal(1, candidateLimitField?.GetValue(service));
-    }
-
-    [Fact]
-    public void CandidateLimit_CustomValue_Preserved()
-    {
-        var service = new ImapClientService("imap.example.com", candidateLimit: 10, logger: _logger);
-
-        var candidateLimitField = typeof(ImapClientService).GetField("_candidateLimit", BindingFlags.NonPublic | BindingFlags.Instance);
-        Assert.Equal(10, candidateLimitField?.GetValue(service));
-    }
+    // Removed: CandidateLimit tests - parameter no longer exists (only processes latest message)
 
     [Fact]
     public void IdleHeartbeat_OverridesDefault()
@@ -146,12 +130,7 @@ public class ImapClientServiceTests : IDisposable
         Assert.Equal(TimeSpan.FromMinutes(5), idleHeartbeatField?.GetValue(service));
     }
 
-    [Fact]
-    public void MaxAttemptsPerUid_IsThree()
-    {
-        var maxAttemptsField = typeof(ImapClientService).GetField("MaxAttemptsPerUid", BindingFlags.NonPublic | BindingFlags.Static);
-        Assert.Equal(3, maxAttemptsField?.GetValue(null));
-    }
+    // Removed: MaxAttemptsPerUid test - constant no longer exists (simplified error handling)
 
     // ========== Core Startup State Tests ==========
 
@@ -173,48 +152,17 @@ public class ImapClientServiceTests : IDisposable
         Assert.Equal(Disconnected, state);
     }
 
-    [Fact]
-    public void UidProcessing_RejectsOlderUidInSameValidity()
-    {
-        var alreadyProcessed = InvokeIsUidAlreadyProcessed(
-            uid: new UniqueId(100),
-            lastProcessedUid: new UniqueId(120),
-            currentUidValidity: 42,
-            lastUidValidity: 42,
-            uidNext: new UniqueId(130));
-
-        Assert.True(alreadyProcessed);
-    }
-
-    [Fact]
-    public void UidProcessing_AllowsNewerUidWhenUidNextMovesAhead()
-    {
-        var alreadyProcessed = InvokeIsUidAlreadyProcessed(
-            uid: new UniqueId(125),
-            lastProcessedUid: new UniqueId(120),
-            currentUidValidity: 42,
-            lastUidValidity: 42,
-            uidNext: new UniqueId(130));
-
-        Assert.False(alreadyProcessed);
-    }
-
-    private static bool InvokeIsUidAlreadyProcessed(UniqueId uid, UniqueId? lastProcessedUid, uint? currentUidValidity, uint? lastUidValidity, UniqueId? uidNext)
-    {
-        var method = typeof(ImapClientService).GetMethod("IsUidAlreadyProcessed", BindingFlags.NonPublic | BindingFlags.Static);
-        Assert.NotNull(method);
-        return (bool)method!.Invoke(null, [uid, lastProcessedUid, currentUidValidity, lastUidValidity, uidNext])!;
-    }
+    // Removed: UID processing tests - logic consolidated into GetLatestUnreadUidAsync
 
     // ========== Default Values Tests ==========
 
     [Fact]
-    public void Default_PollInterval_Is60Seconds()
+    public void Default_PollInterval_Is30Seconds()
     {
         var service = new ImapClientService("imap.example.com", logger: _logger);
 
         var pollIntervalField = typeof(ImapClientService).GetField("_pollInterval", BindingFlags.NonPublic | BindingFlags.Instance);
-        Assert.Equal(TimeSpan.FromSeconds(60), pollIntervalField?.GetValue(service));
+        Assert.Equal(TimeSpan.FromSeconds(30), pollIntervalField?.GetValue(service));
     }
 
     [Fact]
@@ -226,21 +174,14 @@ public class ImapClientServiceTests : IDisposable
         Assert.Equal(TimeSpan.FromSeconds(600), idleHeartbeatField?.GetValue(service));
     }
 
-    [Fact]
-    public void Default_CandidateLimit_Is5()
-    {
-        var service = new ImapClientService("imap.example.com", logger: _logger);
-
-        var candidateLimitField = typeof(ImapClientService).GetField("_candidateLimit", BindingFlags.NonPublic | BindingFlags.Instance);
-        Assert.Equal(5, candidateLimitField?.GetValue(service));
-    }
+    // Removed: Default_CandidateLimit test - parameter no longer exists
 
     [Fact]
-    public void Default_IdleMaxRetryDelay_Is30Seconds()
+    public void Default_IdleMaxRetryDelay_Is60Seconds()
     {
         var service = new ImapClientService("imap.example.com", logger: _logger);
 
         var maxRetryDelayField = typeof(ImapClientService).GetField("_idleMaxRetryDelay", BindingFlags.NonPublic | BindingFlags.Instance);
-        Assert.Equal(TimeSpan.FromSeconds(30), maxRetryDelayField?.GetValue(service));
+        Assert.Equal(TimeSpan.FromSeconds(60), maxRetryDelayField?.GetValue(service));
     }
 }

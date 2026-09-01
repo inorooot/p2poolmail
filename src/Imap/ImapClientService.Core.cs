@@ -37,25 +37,28 @@ namespace p2poolmail
         private bool _skippedExistingUnreadAtStartup;
         private UniqueId? _lastProcessedUid;
 
-        private TimeSpan _pollInterval = TimeSpan.FromSeconds(60); // IF NO IDLE USE POLLING Interval
-        // 600s (10 minutes) is a provider-friendly heartbeat that keeps the connection
-        // alive without busy-looping the server. If the server does not push EXISTS
-        // during IDLE, new-mail detection is bounded by this interval.
+        // Server polling interval when IDLE is not supported.
+        // Shorter interval improves responsiveness on servers without IDLE.
+        private TimeSpan _pollInterval = TimeSpan.FromSeconds(30);
+        
+        // IDLE heartbeat (provider-friendly): keeps connection alive and checks for mail.
+        // Maximum delay for new message detection. Extended to 10 minutes as requested.
         private TimeSpan _idleHeartbeat = TimeSpan.FromSeconds(600);
-        private int _candidateLimit = 5;
-        private TimeSpan _idleMaxRetryDelay = TimeSpan.FromSeconds(30);
+        
+        // Maximum delay for exponential backoff during IDLE failures.
+        // With exponential backoff up to 2^6 = 64 seconds, effectively enforced at 60.
+        private TimeSpan _idleMaxRetryDelay = TimeSpan.FromSeconds(60);
+        
+        // Timeout for NOOP keep-alive commands to prevent permanent hangs.
+        private TimeSpan _noapTimeout = TimeSpan.FromSeconds(15);
         private int _idleFailureCount;
-        // Guard against re-entrant processing of the same UID if the server emits a
-        // duplicate notification before the prior pass has advanced the watermark.
-        private readonly HashSet<UniqueId> _inFlightUids = new();
+        // Track the UID currently being processed to avoid duplicate handling if server
+        // emits notification before watermark is advanced.
+        private UniqueId? _inFlightUid;
         /// <summary>UIDVALIDITY of INBOX at the time <see cref="_lastProcessedUid"/> was captured. A change invalidates all UIDs.</summary>
         private uint? _lastUidValidity;
-        /// <summary>Retry bookkeeping for a message that repeatedly fails processing (poison message).</summary>
-        private UniqueId? _stuckUid;
-        private int _stuckUidAttempts;
-        private const int MaxAttemptsPerUid = 3;
 
-        public ImapClientService(string host, int port = 993, bool useSsl = true, string? username = null, string? password = null, Action<string>? logger = null, bool ignoreCertificateErrors = false, TimeSpan? idleHeartbeat = null, int candidateLimit = 5)
+        public ImapClientService(string host, int port = 993, bool useSsl = true, string? username = null, string? password = null, Action<string>? logger = null, bool ignoreCertificateErrors = false, TimeSpan? idleHeartbeat = null)
         {
             _host = host ?? throw new ArgumentNullException(nameof(host));
             _port = port;
@@ -68,7 +71,6 @@ namespace p2poolmail
             if (idleHeartbeat.HasValue)
                 _idleHeartbeat = idleHeartbeat.Value;
 
-            _candidateLimit = Math.Max(1, candidateLimit);
             _client = CreateClient();
         }
 

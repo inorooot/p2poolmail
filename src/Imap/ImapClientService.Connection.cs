@@ -104,12 +104,21 @@ namespace p2poolmail
         public async Task DisconnectAsync()
         {
             await StopIdleAsync().ConfigureAwait(false);
+            await TryDisconnectAsync().ConfigureAwait(false);
+        }
+
+        private async Task TryDisconnectAsync()
+        {
             try
             {
                 if (_client.IsConnected)
                     _client.Disconnect(true);
             }
-            catch { }
+            catch (Exception ex)
+            {
+                _logger?.Invoke($"Error during disconnect: {ex.Message}");
+            }
+            await Task.CompletedTask;
         }
 
         private async Task EnsureConnectedAsync(CancellationToken token)
@@ -124,8 +133,7 @@ namespace p2poolmail
             }
             catch (Exception ex)
             {
-                // No delay here: the IDLE loop applies its own exponential backoff,
-                // so pacing stays in one place (double delays would just slow recovery).
+                // No delay here: the IDLE loop applies its own exponential backoff.
                 _logger?.Invoke($"Failed to connect to {_host}:{_port}: {ex.Message}");
                 throw;
             }
@@ -133,7 +141,7 @@ namespace p2poolmail
 
         private async Task<IMailFolder> ResolveFolderAsync(string? folderName)
         {
-            if (string.IsNullOrWhiteSpace(folderName) || string.Equals(folderName, "INBOX", StringComparison.OrdinalIgnoreCase))
+            if (string.IsNullOrWhiteSpace(folderName) || IsInboxRequest(folderName))
                 return _client.Inbox;
 
             try
@@ -142,10 +150,13 @@ namespace p2poolmail
             }
             catch (Exception ex)
             {
-                _logger?.Invoke($"Failed to resolve IMAP folder '{folderName}': {ex.Message}");
+                _logger?.Invoke($"Failed to resolve folder '{folderName}': {ex.Message}");
                 throw;
             }
         }
+
+        private static bool IsInboxRequest(string? folderName) =>
+            string.Equals(folderName, "INBOX", StringComparison.OrdinalIgnoreCase);
 
         private async Task<IMailFolder> ResolveAndOpenFolderAsync(string? folderName, FolderAccess access, CancellationToken cancellationToken = default)
         {
