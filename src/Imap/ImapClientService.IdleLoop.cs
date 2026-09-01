@@ -84,16 +84,15 @@ namespace p2poolmail
                     }
                     catch (Exception ex)
                     {
-                        // Provider-friendly reconnect: back off exponentially so a persistent
-                        // failure (server down, credentials revoked, network outage) does not
-                        // turn into a reconnect storm every few seconds.
                         consecutiveFailures++;
                         SetState(ImapRunState.Reconnecting);
-                        var delay = TimeSpan.FromSeconds(Math.Min(5d * Math.Pow(2, Math.Min(consecutiveFailures - 1, 4)), 60d));
-                        _logger?.Invoke($"Idle loop error: {ex.Message} - reconnecting in {delay.TotalSeconds:F0}s");
+                        _logger?.Invoke($"Idle loop error: {ex.Message} - reconnecting immediately");
+
+                        // Reconnect without any artificial delay so a transient network issue
+                        // does not hold back delivery of newly arrived mail.
                         try
                         {
-                            await Task.Delay(delay, token).ConfigureAwait(false);
+                            await Task.CompletedTask.ConfigureAwait(false);
                         }
                         catch
                         {

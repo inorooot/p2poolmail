@@ -5,18 +5,10 @@ namespace p2poolmail
     /// <summary>Mail waiting of <see cref="ImapClientService"/>: IMAP IDLE with heartbeat, polling fallback and backoff.</summary>
     public partial class ImapClientService
     {
-        private async Task WaitForMailAsync(IMailFolder folder, bool supportsIdle, CancellationToken token, CancellationToken folderEventToken, string? sessionId = null)
+        private async Task WaitForMailAsync(IMailFolder folder, CancellationToken token, CancellationToken folderEventToken, string? sessionId = null)
         {
-            if (supportsIdle)
-            {
-                SetState(ImapRunState.Idle);
-                await WaitWithIdleAsync(folder, folderEventToken, token, _idleHeartbeat).ConfigureAwait(false);
-            }
-            else
-            {
-                SetState(ImapRunState.Polling);
-                await WaitWithPollingAsync(token).ConfigureAwait(false);
-            }
+            SetState(ImapRunState.Idle);
+            await WaitWithIdleAsync(folder, folderEventToken, token, _idleHeartbeat).ConfigureAwait(false);
         }
 
         private async Task WaitWithIdleAsync(IMailFolder folder, CancellationToken folderEventToken, CancellationToken cancellationToken, TimeSpan? heartbeat = null)
@@ -88,7 +80,6 @@ namespace p2poolmail
         private void ResetIdleState()
         {
             _idleFailureCount = 0;
-            _idleFallbackWarned = false;
         }
 
         private async Task KeepAliveAsync(CancellationToken token)
@@ -126,45 +117,9 @@ namespace p2poolmail
             SetState(ImapRunState.Reconnecting);
             _idleFailureCount++;
 
-            // Exponential backoff with cap: 2^n seconds, max 60 seconds
-            // 1st: 2s, 2nd: 4s, 3rd: 8s, 4th: 16s, 5th: 32s, 6th+: 60s
-            var delayMs = Math.Min(
-                _idleMaxRetryDelay.TotalMilliseconds,
-                Math.Pow(2, Math.Min(_idleFailureCount, 6)) * 1000);
-
-            var delay = TimeSpan.FromMilliseconds(delayMs);
-
-            LogIdleFailure(ex, _idleFailureCount, delay);
-            await KeepAliveAsync(token).ConfigureAwait(false);
-            await Task.Delay(delay, token).ConfigureAwait(false);
-        }
-
-        private void LogIdleFailure(Exception ex, int attemptNumber, TimeSpan delay)
-        {
-            if (!_idleFallbackWarned)
-            {
-                _logger?.Invoke($"IDLE: failed on attempt #{attemptNumber}: {ex.GetType().Name}");
-                _logger?.Invoke($"IDLE: will retry in {delay.TotalSeconds:F0}s (exponential backoff)");
-                _idleFallbackWarned = true;
-            }
-        }
-
-        private async Task WaitWithPollingAsync(CancellationToken token)
-        {
-            LogPollingStart();
-            _idleFailureCount = 0;
+            _logger?.Invoke($"IDLE: failed on attempt #{_idleFailureCount}: {ex.GetType().Name}; reconnecting immediately");
 
             await KeepAliveAsync(token).ConfigureAwait(false);
-            await Task.Delay(_pollInterval, token).ConfigureAwait(false);
-        }
-
-        private void LogPollingStart()
-        {
-            if (!_idleFallbackWarned)
-            {
-                _logger?.Invoke($"POLL: using polling every {_pollInterval.TotalSeconds:F0}s (server doesn't support IDLE)");
-                _idleFallbackWarned = true;
-            }
         }
 
         public async Task StopIdleAsync()

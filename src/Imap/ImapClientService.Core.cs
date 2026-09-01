@@ -6,8 +6,8 @@ namespace p2poolmail
     /// <summary>
     /// Core of the IMAP client service: fields, construction and disposal.
     /// Split across partial class files: <c>Tls</c> (client factory + TLS policy),
-    /// <c>Connection</c> (connect/auth/folder access), <c>Idle</c> (IDLE loop and
-    /// polling wait) and <c>Messages</c> (fetch/process mail).
+    /// <c>Connection</c> (connect/auth/folder access), <c>Idle</c> (IDLE loop) and
+    /// <c>Messages</c> (fetch/process mail).
     /// </summary>
     public partial class ImapClientService : IDisposable
     {
@@ -16,7 +16,6 @@ namespace p2poolmail
             Disconnected,
             Connecting,
             Idle,
-            Polling,
             Reconnecting,
             Stopped
         }
@@ -32,25 +31,20 @@ namespace p2poolmail
         private ImapClient _client;
         private CancellationTokenSource? _idleCts;
         private Task? _idleTask;
-        private bool _idleFallbackWarned;
         private ImapRunState _state = ImapRunState.Disconnected;
         private bool _skippedExistingUnreadAtStartup;
         private UniqueId? _lastProcessedUid;
 
-        // Server polling interval when IDLE is not supported.
-        // Shorter interval improves responsiveness on servers without IDLE.
-        private TimeSpan _pollInterval = TimeSpan.FromSeconds(30);
-        
         // IDLE heartbeat (provider-friendly): keeps connection alive and checks for mail.
         // Maximum delay for new message detection. Extended to 10 minutes as requested.
         private TimeSpan _idleHeartbeat = TimeSpan.FromSeconds(600);
         
-        // Maximum delay for exponential backoff during IDLE failures.
-        // With exponential backoff up to 2^6 = 64 seconds, effectively enforced at 60.
-        private TimeSpan _idleMaxRetryDelay = TimeSpan.FromSeconds(60);
+        // Reconnect immediately for network recovery: no delay/backoff, so new mail is
+        // not held up by a deliberate reconnect gap after a transient IMAP failure.
+        private TimeSpan _idleMaxRetryDelay = TimeSpan.Zero;
         
         // Timeout for NOOP keep-alive commands to prevent permanent hangs.
-        private TimeSpan _noapTimeout = TimeSpan.FromSeconds(15);
+        private TimeSpan _noapTimeout = TimeSpan.FromSeconds(10);
         private int _idleFailureCount;
         // Track the UID currently being processed to avoid duplicate handling if server
         // emits notification before watermark is advanced.

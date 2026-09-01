@@ -35,7 +35,7 @@ namespace p2poolmail
 
             try
             {
-                await WaitForMailAsync(folder, supportsIdle, token, folderEventToken.Token, sessionId).ConfigureAwait(false);
+                await WaitForMailAsync(folder, token, folderEventToken.Token, sessionId).ConfigureAwait(false);
             }
             finally
             {

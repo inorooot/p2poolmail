@@ -19,9 +19,8 @@ public class ImapClientServiceTests : IDisposable
     private static readonly object Disconnected = Enum.GetValues(ImapRunStateType).GetValue(0)!;
     private static readonly object Connecting = Enum.GetValues(ImapRunStateType).GetValue(1)!;
     private static readonly object Idle = Enum.GetValues(ImapRunStateType).GetValue(2)!;
-    private static readonly object Polling = Enum.GetValues(ImapRunStateType).GetValue(3)!;
-    private static readonly object Reconnecting = Enum.GetValues(ImapRunStateType).GetValue(4)!;
-    private static readonly object Stopped = Enum.GetValues(ImapRunStateType).GetValue(5)!;
+    private static readonly object Reconnecting = Enum.GetValues(ImapRunStateType).GetValue(3)!;
+    private static readonly object Stopped = Enum.GetValues(ImapRunStateType).GetValue(4)!;
 
     public void Dispose()
     {
@@ -104,7 +103,7 @@ public class ImapClientServiceTests : IDisposable
     {
         var service = new ImapClientService("imap.example.com", logger: _logger);
 
-        var allStates = new[] { Disconnected, Connecting, Idle, Polling, Reconnecting, Stopped };
+        var allStates = new[] { Disconnected, Connecting, Idle, Reconnecting, Stopped };
         foreach (var expectedState in allStates)
         {
             _logMessages.Clear();
@@ -157,15 +156,6 @@ public class ImapClientServiceTests : IDisposable
     // ========== Default Values Tests ==========
 
     [Fact]
-    public void Default_PollInterval_Is30Seconds()
-    {
-        var service = new ImapClientService("imap.example.com", logger: _logger);
-
-        var pollIntervalField = typeof(ImapClientService).GetField("_pollInterval", BindingFlags.NonPublic | BindingFlags.Instance);
-        Assert.Equal(TimeSpan.FromSeconds(30), pollIntervalField?.GetValue(service));
-    }
-
-    [Fact]
     public void Default_IdleHeartbeat_Is600Seconds()
     {
         var service = new ImapClientService("imap.example.com", logger: _logger);
@@ -177,11 +167,11 @@ public class ImapClientServiceTests : IDisposable
     // Removed: Default_CandidateLimit test - parameter no longer exists
 
     [Fact]
-    public void Default_IdleMaxRetryDelay_Is60Seconds()
+    public void Default_IdleMaxRetryDelay_IsZeroSeconds()
     {
         var service = new ImapClientService("imap.example.com", logger: _logger);
 
         var maxRetryDelayField = typeof(ImapClientService).GetField("_idleMaxRetryDelay", BindingFlags.NonPublic | BindingFlags.Instance);
-        Assert.Equal(TimeSpan.FromSeconds(60), maxRetryDelayField?.GetValue(service));
+        Assert.Equal(TimeSpan.Zero, maxRetryDelayField?.GetValue(service));
     }
 }
