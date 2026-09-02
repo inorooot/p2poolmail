@@ -20,7 +20,7 @@ Get mining alerts and events automatically, or send an email anytime, anywhere t
 
 Besides automatic notifications, you can proactively request your latest mining status at any time:
 just send an email to the mailbox watched by `[imap_server]`, and p2poolmail will reply with a full statistics report.
-To avoid spam backscatter, automatic/bounce senders (no-reply, mailer-daemon, postmaster, ...) are never answered, and when `[imap_server].reply_allowlist` is non-empty, only listed senders get a reply.
+and when `[imap_server].reply_allowlist` is non-empty, only listed senders get a reply.
 
 # How it works
 
