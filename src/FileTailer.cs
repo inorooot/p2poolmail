@@ -369,16 +369,33 @@ internal sealed class FileTailer
                 newReadPos = Math.Min(currentReadPos, currentLength);
             }
 
-            if (currentLength <= 0)
-            {
-                return true;
-            }
-
+            // The write time changed, so the file was appended to OR replaced.
+            // Re-open the stream in BOTH cases so _stream always tracks the file
+            // currently at _path, never a renamed (dead) inode.
+            //
+            // The empty-file branch used to return WITHOUT re-opening: after a
+            // rename-style rotation (new p2pool.log created empty), _stream kept
+            // pointing at the old file while newReadPos had already been forced
+            // to 0. The next drain then re-read the ENTIRE old log from byte 0
+            // and replayed every line - duplicate SHARE FOUND / payout / alert
+            // emails - until the new file received its first write.
             DisposeStream();
             _stream = OpenReadStream(_path);
             if (_stream != null)
             {
                 try { _lastWriteUtc = new FileInfo(_path).LastWriteTimeUtc; } catch { }
+            }
+
+            // When the read position moved backwards, the byte stream is no
+            // longer a continuation of what was read before (truncated or
+            // replaced file): drop the pending partial line and any buffered
+            // partial UTF-8 sequence so the new file starts clean. On a plain
+            // append (newReadPos == currentReadPos) the pending line MUST be
+            // kept - it belongs to a line that is still being written.
+            if (newReadPos != currentReadPos)
+            {
+                _decoder.Reset();
+                _lineBufferLength = 0;
             }
 
             return true;
