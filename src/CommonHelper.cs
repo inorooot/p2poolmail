@@ -1,6 +1,7 @@
 // Copyright (c) 2026 inorooot. MIT License.
 
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Buffers;
 using System.Text.Json;
@@ -9,6 +10,78 @@ namespace p2poolmail;
 
 internal class CommonHelper
 {
+    // Blittable-only DllImports (byte instead of bool) so they compile as direct
+    // P/Invokes under Native AOT without requiring AllowUnsafeBlocks.
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr GetStdHandle(int nStdHandle);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern byte GetConsoleMode(IntPtr hConsoleHandle, out uint lpMode);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern byte SetConsoleMode(IntPtr hConsoleHandle, uint dwMode);
+
+    private const int StdOutputHandle = -11;
+    private const int StdErrorHandle = -12;
+    private const uint EnableVirtualTerminalProcessing = 0x0004;
+
+    /// <summary>
+    /// Enable ANSI escape-sequence processing on the Windows console (conhost).
+    /// Without this, classic cmd/conhost windows print the raw sequences as
+    /// garbage (e.g. "←[38;5;167m") instead of applying colors.
+    /// </summary>
+    private static bool TryEnableWindowsVirtualTerminal()
+    {
+        try
+        {
+            bool allEnabled = true;
+            foreach (var stdHandle in stackalloc int[] { StdOutputHandle, StdErrorHandle })
+            {
+                var handle = GetStdHandle(stdHandle);
+                if (handle == IntPtr.Zero || handle == new IntPtr(-1))
+                {
+                    allEnabled = false;
+                    continue;
+                }
+
+                if (GetConsoleMode(handle, out uint mode) == 0)
+                {
+                    allEnabled = false;
+                    continue;
+                }
+
+                if ((mode & EnableVirtualTerminalProcessing) != 0)
+                    continue; // already enabled (e.g. Windows Terminal)
+
+                if (SetConsoleMode(handle, mode | EnableVirtualTerminalProcessing) == 0)
+                    allEnabled = false;
+            }
+
+            return allEnabled;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    static CommonHelper()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            // If VT processing cannot be enabled (legacy Windows), drop colors
+            // entirely so escape sequences never pollute the console output.
+            bool vtEnabled = TryEnableWindowsVirtualTerminal();
+            ColorStdout = !Console.IsOutputRedirected && vtEnabled;
+            ColorStderr = !Console.IsErrorRedirected && vtEnabled;
+        }
+        else
+        {
+            ColorStdout = !Console.IsOutputRedirected;
+            ColorStderr = !Console.IsErrorRedirected;
+        }
+    }
+
     #region read json field use Utf8JsonReader
      
     public static bool TryReadJsonField(string json, string fieldName, out string value)
@@ -494,8 +567,10 @@ internal class CommonHelper
 
     // ANSI colors are suppressed when stdout/stderr is redirected (e.g. systemd),
     // so escape sequences never pollute redirected logs.
-    private static readonly bool ColorStdout = !Console.IsOutputRedirected;
-    private static readonly bool ColorStderr = !Console.IsErrorRedirected;
+    // On Windows, colors are only kept if VT processing was enabled successfully
+    // (see static constructor) — otherwise the sequences would print as garbage.
+    private static readonly bool ColorStdout;
+    private static readonly bool ColorStderr;
 
     private static string FormatConsoleMessage(string color, string level, string message, bool colorEnabled)
     {
