@@ -4,5 +4,5 @@ namespace p2poolmail;
 
  internal static class AppVersion
 {
-    internal const string Value = "0.0.1";
+    internal const string Value = "0.0.2";
 }
