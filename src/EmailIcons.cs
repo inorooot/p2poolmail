@@ -14,4 +14,5 @@ internal static class EmailIcons
 
     // ---- Reports & workers ----
     public const string Workers = "👷";    // worker count and trend lines
+    public const string Stats = "📊";      // statistics report / status reply
 }

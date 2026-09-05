@@ -4,7 +4,7 @@ namespace p2poolmail;
 
 internal static class EmailTemplates
 {
-    public const string RecoverySubject = "Cleared";
+    public const string RecoverySubject = "Alert Cleared";
 
     public static string GetSubject(Notification.Type type) => Notification.GetSubject(type);
 

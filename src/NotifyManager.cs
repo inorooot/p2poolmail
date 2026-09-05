@@ -52,8 +52,18 @@ internal static class NotifyManager
            //alert
             Notification.ObserveAlert(type, CommonHelper.TimestampUtc);
         else
-            //event
-            EmailQueue.Enqueue(Notification.GetSubject(type), CommonHelper.ParseLogLine(line,CommonHelper.LogParseFields.Content));
+        {
+            //event - prefix the parsed log content with the event's icon so the
+            //body always starts with an icon, like the alert/recovery emails.
+            var icon = type switch
+            {
+                Notification.Type.ShareFound => EmailIcons.ShareFound,
+                Notification.Type.GotaPayout => EmailIcons.Payout,
+                _ => EmailIcons.Info
+            };
+            var content = CommonHelper.ParseLogLine(line, CommonHelper.LogParseFields.Content);
+            EmailQueue.Enqueue(Notification.GetSubject(type), $"{icon} {content}");
+        }
     }
 
     // Single reused instance: the EMA state and confirmation window must persist across
@@ -71,7 +81,7 @@ internal static class NotifyManager
                 var subject = $"Worker online count: {prev} -> {cur}";
                 // TimestampUtc is a unix-seconds long; convert before applying the ":u" format,
                 // otherwise interpolation throws FormatException and the mail is silently lost.
-                var body = $"\n{EmailIcons.Workers} Previous: {prev}\n{EmailIcons.Workers} Current: {cur}\nTrend: {trend}\n";
+                var body = $"{EmailIcons.Workers} Previous: {prev}\n{EmailIcons.Workers} Current: {cur}\nTrend: {trend}\n";
                 EmailQueue.Enqueue(subject, body, "smoothed-count");
             }
             catch (Exception ex)

@@ -63,7 +63,7 @@ namespace p2poolmail
         public static string StratumTxtFormat()
         {
             var msg = new StringBuilder();
-            msg.Append($"Hi,Instruction received at {DateTime.Now:HH:mm:ss}.").Append("\r\n");
+            msg.Append(EmailIcons.Stats).Append($" Hi,Instruction received at {DateTime.Now:HH:mm:ss}.").Append("\r\n");
             var stream = LoadLocalStratum();
             if (stream is null) return string.Empty;
 

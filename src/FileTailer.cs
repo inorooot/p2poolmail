@@ -99,7 +99,7 @@ internal sealed class FileTailer
                     var now = CommonHelper.TimestampUtc;
                     if (now - _lastGrowthUnixSeconds >= IdleThresholdSeconds)
                     { 
-                        CommonHelper.WriteWarn($"No new-line in the log file , Is p2pool not running ?");
+                        CommonHelper.WriteWarn($"No new-line in the log file, Is p2pool not running?");
                     }
                     await WaitSignalOrTimeout(TimeSpan.FromSeconds(PollIntervalSeconds), ct).ConfigureAwait(false);
                     continue;
