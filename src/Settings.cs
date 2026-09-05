@@ -22,7 +22,7 @@ internal sealed partial class Settings
     /// <summary>Loads the config from the given path (default: "./Config.toml").</summary>
     public static void Initialize(string? path = null)
     {
-        var configPath = path ?? Path.Combine(Directory.GetCurrentDirectory(), "Config.toml");
+        var configPath = path ?? Path.Combine(Directory.GetCurrentDirectory(), "config.toml");
         Current = new Settings(configPath);
     }
 

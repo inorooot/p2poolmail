@@ -39,3 +39,11 @@ ping_url = ""                             # URL used when remote ping is enabled
 enable = true                             # Enable scheduled daily statistics
 time_of_day = "18:00"                     # Local time for the report (HH:mm)
 frequency_hours = 24                      # No changes required
+
+ 
+#Starts by default
+#[alter]
+#Monerod is not synchronized=true
+#Monerod is busy syncing=true
+#JSONRPCRequest error EBADF=true
+#P2PServer ZMQ is not running=true
