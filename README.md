@@ -95,8 +95,8 @@ p2poolmail is a .NET 10 console application and is published as a self-contained
 - [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
 - Native AOT toolchain:
   - **Linux (Debian/Ubuntu):** `sudo apt install clang zlib1g-dev`
-  - **Windows:** Visual Studio 2022 with the "Desktop development with C++" workload
-  - **macOS:** Xcode command line tools (`xcode-select --install`)
+  - **Windows:** 
+  - **macOS:** 
 
 **Build (debug):**
 
@@ -113,9 +113,3 @@ dotnet publish -c Release
 ```
 
 The output binary and a default `Config.toml` are written to `bin/Release/net10.0/<rid>/publish/` (e.g. `bin/Release/net10.0/linux-x64/publish/`). Copy that folder anywhere, edit `Config.toml`, then run the binary from that directory.
-
-To cross-compile for another platform, add the runtime identifier:
-
-```sh
-dotnet publish -c Release -r linux-x64   # or win-x64, osx-arm64, ...
-```
