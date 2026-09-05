@@ -25,6 +25,7 @@ internal static class Stats
     /// <summary>
     /// Records one matched log line into the daily totals. Hooked from
     /// NotifyManager.Handle for every keyword hit, regardless of notification flags.
+    /// Thread-safe: all counter updates are protected by the same Lock.
     /// </summary>
     internal static void Observe(Notification.Type type, ReadOnlySpan<char> line)
     {
@@ -39,7 +40,10 @@ internal static class Stats
                 break;
 
             case Notification.Type.ShareFound:
-                Interlocked.Increment(ref _sharesFound);
+                lock (Lock)
+                {
+                    _sharesFound++;
+                }
                 break;
         }
     }
