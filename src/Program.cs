@@ -240,7 +240,7 @@ namespace p2poolmail
         {
             try
             {
-                var tailer = new FileTailer(Settings.Current.p2pool_log.file_path);
+                using var tailer = new FileTailer(Settings.Current.p2pool_log.file_path);
                 await tailer.RunAsync(_shutdownCts.Token);
                 return 0;
             }

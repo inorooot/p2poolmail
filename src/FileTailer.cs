@@ -9,7 +9,7 @@ namespace p2poolmail;
 /// Low overhead and AOT-friendly.
 /// String/line processing methods keep the original implementation.
 /// </summary>
-internal sealed class FileTailer
+internal sealed class FileTailer : IDisposable
 {
     private readonly string _path;
     private const int PollIntervalSeconds=3;
@@ -29,6 +29,8 @@ internal sealed class FileTailer
     private readonly char[] _decodeBuffer = new char[8192];
     private char[] _lineBuffer;
     private int _lineBufferLength;
+
+    private bool _disposed;
 
     public FileTailer(string path)
     {
@@ -496,6 +498,23 @@ internal sealed class FileTailer
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
         catch (Exception ex) { CommonHelper.WriteLine($"WaitSignalOrTimeout error: {ex.Message}"); }
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+
+        DisposeWatcher();
+        DisposeStream();
+        _signal.Dispose();
+
+        // Return the rented buffer to the pool to prevent memory leak
+        if (_lineBuffer != null)
+        {
+            ArrayPool<char>.Shared.Return(_lineBuffer);
+            _lineBuffer = null!;
+        }
     }
 }
 
