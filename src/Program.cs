@@ -127,13 +127,7 @@ namespace p2poolmail
                 CommonHelper.WriteLine("Daily stats scheduler disabled ([daily_stats].enable = false)");
             }
 
-            // Dev helper: `p2poolmail --sendtest` sends one test email and exits.
-            if (args.Length > 0 && args[0] == "--sendtest")
-            {
-                await SendTestEmailAsync();
-                await ShutdownAsync(imapService);
-                return 0;
-            }
+             
 
             // Tailing p2pool.log is the primary task; block here until cancelled or failed.
            
@@ -284,20 +278,7 @@ namespace p2poolmail
             await EmailQueue.AbortAsync().ConfigureAwait(false);
         }
 
-        /// <summary>Dev helper: send an SMTP test email (fully asynchronous, never blocks the caller).</summary>
-        private static async Task SendTestEmailAsync()
-        {
-            const string subject = "SMTP Test";
-            var body = $"SMTP test email sent at {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC";
-
-            CommonHelper.WriteLine("Sending SMTP test email...");
-
-            var result = await EmailQueue.SendAsync(subject, body).ConfigureAwait(false);
-            CommonHelper.WriteLine(result == EmailQueue.SendResult.Sent
-                ? "SMTP test email sent successfully.  check your inbox or spam folder."
-                : $"SMTP test email send status: {result}. check your inbox or spam folder.");
-        }
-
+         
         private static void OnCancelRequested(object? sender, ConsoleCancelEventArgs e)
         {
             e.Cancel = true; // Suppress the default termination and shut down cooperatively instead.
