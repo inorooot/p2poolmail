@@ -271,11 +271,9 @@ internal sealed class EmailSender : IAsyncDisposable
 
     private SecureSocketOptions SocketOptions()
     {
-        if (_smtp.useSsl)
-            return SecureSocketOptions.SslOnConnect;   // implicit TLS, usually port 465
-        if (_smtp.startTls)
-            return SecureSocketOptions.StartTls;       // plain connect, then upgrade, usually port 587
-        return SecureSocketOptions.None;
+        return _smtp.useSsl
+            ? SecureSocketOptions.Auto   // implicit TLS (usually port 465) or STARTTLS (usually port 587), picked automatically
+            : SecureSocketOptions.None;
     }
 
     private async Task DisconnectAsync()

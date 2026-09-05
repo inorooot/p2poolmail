@@ -176,7 +176,7 @@ public class SmtpPipelineTests : IDisposable
     // ========== TLS Policy Mapping ==========
 
     [Fact]
-    public void SmtpConfig_UseSslTrue_MapsToSslOnConnect()
+    public void SmtpConfig_UseSslTrue_MapsToAuto()
     {
         Load(ValidSmtp);
         EmailQueue.Initialize();
@@ -189,7 +189,7 @@ public class SmtpPipelineTests : IDisposable
 
         var socketOptionsMethod = sender!.GetType().GetMethod("SocketOptions", BindingFlags.NonPublic | BindingFlags.Instance);
         var options = socketOptionsMethod?.Invoke(sender, null);
-        Assert.Equal(SecureSocketOptions.SslOnConnect, options);
+        Assert.Equal(SecureSocketOptions.Auto, options);
     }
 
     [Fact]

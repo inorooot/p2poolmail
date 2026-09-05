@@ -9,8 +9,7 @@ data_api_dir = "/path/to/data_api_dir/"  # Point to the P2Pool data API director
 [smtp]
 host = "smtp.example.com"                # SMTP server hostname
 port = 465
-useSsl = true                            # Implicit TLS (usually port 465)
-startTls = false                         # STARTTLS on a plain connection (usually port 587). Ignored when useSsl = true
+useSsl = true                            # Enable SSL for the SMTP connection
 username = "sender@example.com"          # SMTP login username (also used as the From address)
 fromName = "p2poolmail"                  # Display name shown to recipients
 password = "YOUR_SMTP_CREDENTIAL"        # Use the credential required by your provider (OAuth2 unsupported)
