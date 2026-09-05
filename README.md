@@ -34,8 +34,8 @@ p2poolmail requires [P2Pool](https://github.com/SChernykh/p2pool/blob/master/doc
 ./p2pool ... --stratum-api --data-api <data_api_dir>
 ```
 
-- `--stratum-api` — enables recording of hashrate, effort, and worker details.
-- `--data-api <data_api_dir>` — tells P2Pool where to write its mining data files. Use the same value as `data_api_dir` in `Config.toml`.
+- `--stratum-api` enables recording of hashrate, effort, and worker details.
+- `--data-api <data_api_dir>` tells P2Pool where to write its mining data files. Use the same value as `data_api_dir` in `Config.toml`.
 
 ## Configuration
 
