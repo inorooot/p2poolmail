@@ -1,7 +1,9 @@
 # p2poolmail config setting
+# Windows paths must use double backslashes or forward slashes,
+#e.g. "D:\\p2pool\\p2pool.log" or "D:/p2pool/p2pool.log"
 
 [p2pool_log]
-file_path = "/path/to/p2pool.log" # Path to the P2Pool log file
+file_path = "/path/to/p2pool.log" # Path to the P2Pool log file. windows format: D:/path/to/p2pool.log
 data_api_dir = "/path/to/data_api_dir/"  # Point to the P2Pool data API directory (--data-api <data_api_dir>)
 
 [smtp]
