@@ -3,7 +3,10 @@ using p2poolmail;
 
 namespace Tests;
 
- 
+// Mutates the process-wide Stats payout/share counters via reflection, so it
+// belongs in the GlobalState collection with the other state-touching classes
+// (see AssemblyInfo.cs for the assembly-level parallelization policy).
+[Collection("GlobalState")]
 public class StatsTests
 {
     public StatsTests()

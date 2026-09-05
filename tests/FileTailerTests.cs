@@ -11,7 +11,9 @@ namespace Tests;
 /// drain then re-read the ENTIRE old log from byte 0 and replayed every line,
 /// producing duplicate SHARE FOUND / payout / alert emails.
 /// Private members are reached via reflection, consistent with the other test
-/// classes in this project.
+/// classes in this project. GlobalState collection: every tailed line runs
+/// NotifyManager.Handle, which reads Notification state that other tests reset
+/// via reflection (see AssemblyInfo.cs for the assembly policy).
 /// </summary>
 [Collection("GlobalState")]
 public class FileTailerTests : IDisposable

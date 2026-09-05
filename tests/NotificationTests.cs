@@ -8,9 +8,8 @@ namespace Tests;
 /// recovery emails go through EmailQueue.Enqueue, which safely no-ops (with a
 /// warning) when the queue was never initialized - exactly the test scenario.
 /// Notification state is static, so every test resets it via reflection.
-/// FileTailerTests also touch it (every tailed line runs Notification.TryResume),
-/// so this class shares the GlobalState collection to keep the reflection-based
-/// state resets race-free under xUnit's cross-collection parallelization.
+/// GlobalState collection: this class and the other state-touching test classes
+/// must never run in parallel (see AssemblyInfo.cs for the assembly policy).
 /// </summary>
 [Collection("GlobalState")]
 public class NotificationTests
