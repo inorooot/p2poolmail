@@ -6,7 +6,14 @@ namespace p2poolmail
     /// <summary>Connection lifecycle of <see cref="ImapClientService"/>: connect, authenticate, folder access.</summary>
     public partial class ImapClientService
     {
-        public async Task ConnectAsync(CancellationToken cancellationToken = default)
+        /// <summary>
+        /// Connects and authenticates. Must only be called while the SyncRoot gate is
+        /// held: MailKit's ImapClient is not thread-safe, and the IDLE loop owns the
+        /// gate for the whole service lifetime. The method is private on purpose -
+        /// external callers go through <see cref="InitializeAsync"/>, never touch the
+        /// client directly.
+        /// </summary>
+        private async Task ConnectAsync(CancellationToken cancellationToken = default)
         {
             if (_client.IsConnected)
                 return;
@@ -19,15 +26,6 @@ namespace p2poolmail
                 SetState(ImapRunState.Idle);
                 LogIdleSupport("Connected");
             }
-            // Cancellation must not take the bypass path: with a cancelled token the
-            // retry below would throw immediately and just mask the original reason.
-            catch (Exception ex) when (_ignoreCertificateErrors && !_client.IsConnected && ex is not OperationCanceledException)
-            {
-                _logger?.Invoke($"IMAP normal SSL connect failed for {_host}:{_port}, retrying with certificate validation disabled. Error: {ex.Message}");
-                await ReconnectWithCertificateValidationBypassAsync(cancellationToken).ConfigureAwait(false);
-                SetState(ImapRunState.Idle);
-                LogIdleSupport("Connected using certificate validation bypass");
-            }
             catch
             {
                 SetState(ImapRunState.Reconnecting);
@@ -39,18 +37,21 @@ namespace p2poolmail
 
         private async Task ConnectAndAuthenticateAsync(CancellationToken cancellationToken)
         {
-            _client.AuthenticationMechanisms.Remove("XOAUTH2");
             await _client.ConnectAsync(_host, _port, _useSsl, cancellationToken).ConfigureAwait(false);
+
+            // MailKit fills AuthenticationMechanisms only after connect, so the
+            // removal must happen here. This keeps us from picking XOAUTH2 without
+            // real OAuth2 credentials.
+            _client.AuthenticationMechanisms.Remove("XOAUTH2");
 
             if (!string.IsNullOrEmpty(_username))
             {
                 await _client.AuthenticateAsync(_username!, _password!, cancellationToken).ConfigureAwait(false);
             }
 
-            // Standard-client behavior: announce ourselves via the IMAP ID extension.
-            // Most servers just log it; some providers (163/126/QQ mail) REQUIRE a client
-            // identification before any other command and reject everything with
-            // "Unsafe Login" otherwise.
+            // Announce ourselves via the IMAP ID extension. Most servers just log
+            // it; some providers (163/126/QQ mail) require it and reject every
+            // command with "Unsafe Login" otherwise.
             if (_client.Capabilities.HasFlag(ImapCapabilities.Id))
             {
                 try
@@ -71,28 +72,6 @@ namespace p2poolmail
             }
         }
 
-        private async Task ReconnectWithCertificateValidationBypassAsync(CancellationToken cancellationToken)
-        {
-            try
-            {
-                if (_client.IsConnected)
-                    _client.Disconnect(true);
-                _client.Dispose();
-            }
-            catch { }
-
-            _client = new ImapClient
-            {
-                ServerCertificateValidationCallback = (_, _, _, _) =>
-                {
-                    _logger?.Invoke($"IMAP SSL certificate validation bypassed for {_host}:{_port}");
-                    return true;
-                }
-            };
-
-            await ConnectAndAuthenticateAsync(cancellationToken).ConfigureAwait(false);
-        }
-
         private void LogIdleSupport(string prefix)
         {
             var supportsIdle = _client.Capabilities.HasFlag(ImapCapabilities.Idle);
@@ -104,10 +83,11 @@ namespace p2poolmail
         public async Task DisconnectAsync()
         {
             await StopIdleAsync().ConfigureAwait(false);
-            await TryDisconnectAsync().ConfigureAwait(false);
+            DisconnectQuiet();
         }
 
-        private async Task TryDisconnectAsync()
+        /// <summary>Disconnects without throwing. Safe to call from anywhere.</summary>
+        private void DisconnectQuiet()
         {
             try
             {
@@ -117,25 +97,6 @@ namespace p2poolmail
             catch (Exception ex)
             {
                 _logger?.Invoke($"Error during disconnect: {ex.Message}");
-            }
-            await Task.CompletedTask;
-        }
-
-        private async Task EnsureConnectedAsync(CancellationToken token)
-        {
-            try
-            {
-                await ConnectAsync(token).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                // No delay here: the IDLE loop applies its own exponential backoff.
-                _logger?.Invoke($"Failed to connect to {_host}:{_port}: {ex.Message}");
-                throw;
             }
         }
 

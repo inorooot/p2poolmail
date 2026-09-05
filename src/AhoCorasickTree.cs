@@ -5,7 +5,7 @@ namespace p2poolmail
 {
     // cp-algorithms style Aho-Corasick with fixed ASCII alphabet (0..127),
     // ASCII case-insensitive matching.
-    public class AhoCorasickTree
+    internal sealed class AhoCorasickTree
     {
         private const int ALPHABET = 128;
 
@@ -14,8 +14,15 @@ namespace p2poolmail
 
         public AhoCorasickTree(string[] keywords)
         {
-            if (keywords == null) throw new ArgumentNullException(nameof(keywords));
-            if (keywords.Length == 0) throw new ArgumentException("should contain keywords", nameof(keywords));
+            ArgumentNullException.ThrowIfNull(keywords);
+            if (keywords.Length == 0)
+                throw new ArgumentException("Keyword list must not be empty.", nameof(keywords));
+
+            for (var i = 0; i < keywords.Length; i++)
+            {
+                if (string.IsNullOrEmpty(keywords[i]))
+                    throw new ArgumentException($"Keyword at index {i} must not be null or empty.", nameof(keywords));
+            }
 
             _nodes = new List<Node> { new Node() };
             _patternLengths = new List<int>();

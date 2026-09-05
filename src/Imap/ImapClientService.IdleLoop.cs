@@ -1,4 +1,3 @@
-using MailKit;
 using MimeKit;
 
 namespace p2poolmail
@@ -7,19 +6,15 @@ namespace p2poolmail
     public partial class ImapClientService
     {
         /// <summary>
-        /// Connects (with retries for transient startup failures such as DNS not being ready)
-        /// and starts the IDLE loop. Returns true on success; on failure it only logs and
-        /// returns false - callers are expected to continue without IMAP.
+        /// Connects (with infinite retries for 24/7 operation) and starts the IDLE loop.
+        /// Returns true on success; on cancellation it propagates the exception.
         /// </summary>
         public async Task<bool> InitializeAsync(Func<MimeMessage, Task> onNewMessage, CancellationToken cancellationToken = default)
         {
             if (onNewMessage == null)
                 throw new ArgumentNullException(nameof(onNewMessage));
 
-            const int maxAttempts = 5;
-            var delay = TimeSpan.FromSeconds(2);
-            var attempt = 0;
-
+            var attempts = 0;
             while (true)
             {
                 try
@@ -33,16 +28,9 @@ namespace p2poolmail
                 }
                 catch (Exception ex)
                 {
-                    attempt++;
-                    if (attempt >= maxAttempts)
-                    {
-                        _logger?.Invoke($"ERROR: IMAP connect failed after {maxAttempts} attempts, giving up (continuing without IMAP): {ex.Message}");
-                        return false;
-                    }
-
-                    _logger?.Invoke($"IMAP initial connect failed (attempt {attempt}/{maxAttempts}): {ex.Message} - retrying in {delay.TotalSeconds:F0}s");
-                    await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
-                    delay = TimeSpan.FromSeconds(Math.Min(delay.TotalSeconds * 2, 30));
+                    // No backoff by design: this program retries immediately.
+                    attempts++;
+                    _logger?.Invoke($"IMAP connect failed: {ex.Message} - retrying (attempt #{attempts})");
                 }
             }
 
@@ -55,55 +43,75 @@ namespace p2poolmail
             if (onNewMessage == null)
                 throw new ArgumentNullException(nameof(onNewMessage));
 
-            if (_idleTask != null && !_idleTask.IsCompleted)
-                return _idleTask;
-
-            _idleCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            var token = _idleCts.Token;
-
-            _idleTask = Task.Run(async () =>
+            lock (_idleLifecycleLock)
             {
-                // Consecutive failures drive the reconnect backoff; any successful
-                // iteration resets it so a healthy link keeps reconnecting fast.
-                var consecutiveFailures = 0;
+                if (_idleTask != null && !_idleTask.IsCompleted)
+                    return _idleTask;
+
+                _idleCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                var token = _idleCts.Token;
+
+                // The IDLE loop owns the connection lifecycle while running.
+                // The SyncRoot gate ensures only this loop touches the ImapClient.
+                _idleTask = Task.Run(() => RunIdleLoopAsync(onNewMessage, token), token);
+
+                return _idleTask;
+            }
+        }
+
+        /// <summary>
+        /// The core IDLE loop. Acquires the SyncRoot gate to exclusively own the ImapClient,
+        /// then iterates: connect → idle → process → repeat. On failure, disconnects and
+        /// reconnects immediately for fast recovery.
+        /// </summary>
+        private async Task RunIdleLoopAsync(Func<MimeMessage, Task> onNewMessage, CancellationToken token)
+        {
+            // Acquire the SyncRoot gate: this loop now exclusively owns the ImapClient.
+            if (!await AcquireLockAsync(token).ConfigureAwait(false))
+            {
+                SetState(ImapRunState.Stopped);
+                return;
+            }
+
+            try
+            {
                 while (!token.IsCancellationRequested)
                 {
                     try
                     {
-                        // No SetState(Connecting) here: when the connection is still up
-                        // this iteration just waits in IDLE - claiming "Connecting" every
-                        // 9 minutes made the state log flicker meaninglessly. ConnectAsync
-                        // sets Connecting itself when an actual reconnect is needed.
+                        // Ensure connection is alive
+                        if (!_client.IsConnected)
+                        {
+                            SetState(ImapRunState.Connecting);
+                            await ConnectAndAuthenticateAsync(token).ConfigureAwait(false);
+                            SetState(ImapRunState.Idle);
+                            LogIdleSupport("Connected");
+                        }
+
+                        // Run one IDLE iteration
                         await IdleLoopIterationAsync(onNewMessage, token).ConfigureAwait(false);
-                        consecutiveFailures = 0;
+                        _idleFailureCount = 0;
                     }
                     catch (OperationCanceledException)
                     {
                         SetState(ImapRunState.Stopped);
-                        break;
+                        throw;
                     }
                     catch (Exception ex)
                     {
-                        consecutiveFailures++;
+                        _idleFailureCount++;
                         SetState(ImapRunState.Reconnecting);
-                        _logger?.Invoke($"Idle loop error: {ex.Message} - reconnecting immediately");
+                        _logger?.Invoke($"IDLE loop error (attempt #{_idleFailureCount}): {ex.GetType().Name}: {ex.Message} - reconnecting");
 
-                        // Reconnect without any artificial delay so a transient network issue
-                        // does not hold back delivery of newly arrived mail.
-                        try
-                        {
-                            await Task.CompletedTask.ConfigureAwait(false);
-                        }
-                        catch
-                        {
-                            SetState(ImapRunState.Stopped);
-                            break;
-                        }
+                        DisconnectQuiet();
                     }
                 }
-            }, token);
-
-            return _idleTask ?? Task.CompletedTask;
+            }
+            finally
+            {
+                // Release the SyncRoot gate
+                _syncRoot.Release();
+            }
         }
     }
 }

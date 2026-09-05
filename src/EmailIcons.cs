@@ -13,6 +13,5 @@ internal static class EmailIcons
     public const string Payout = "💰";     // payout received / payment totals
 
     // ---- Reports & workers ----
-    public const string Stats = "🗓️";      // summary/daily reports
     public const string Workers = "👷";    // worker count and trend lines
 }

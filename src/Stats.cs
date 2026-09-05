@@ -11,7 +11,7 @@ namespace p2poolmail;
 /// the counters, so consecutive reports roughly tile the timeline without strict
 /// window bookkeeping.
 /// </summary>
-public static class Stats
+internal static class Stats
 {
     private const string PayoutMarker = "got a payout of ";
     private const string PayoutUnit = " XMR";
@@ -48,7 +48,7 @@ public static class Stats
     /// Builds and emails the summary report (data of the last 24 hours), then resets
     /// the counters. Optional <paramref name="subject"/> prefixes the default subject.
     /// </summary>
-    public static void Daily_stats(string? subject = null)
+    public static void SendDailyStatsReport(string? subject = null)
     {
         long payouts, shares;
         decimal xmr;
@@ -65,10 +65,10 @@ public static class Stats
             _sharesFound = 0;
         }
 
-        var title = $"{EmailIcons.Stats} Daily p2pool report (last 24h)";
+        var title = "Daily p2pool report (last 24h)";
         var body =
-            $"{EmailIcons.Info} Hello workers,Here's what happened in the last 24 hours:\r\n" +
-            $"{EmailIcons.Payout} Recevied    : {xmr.ToString("0.############", CultureInfo.InvariantCulture)} XMR ({payouts} payment(s))\r\n" +
+            $"{EmailIcons.Info} Hello workers, Here's what happened in the last 24 hours:\r\n" +
+            $"{EmailIcons.Payout} Received    : {xmr.ToString("0.############", CultureInfo.InvariantCulture)} XMR ({payouts} payment(s))\r\n" +
             $"{EmailIcons.ShareFound} Share found : {shares}\r\n" +
             $"Current: \r\n {LocalStratum.StratumTxtFormatLittle()}";
 

@@ -1,5 +1,4 @@
 using MailKit;
-using MailKit.Net.Imap;
 using MimeKit;
 
 namespace p2poolmail
@@ -14,20 +13,15 @@ namespace p2poolmail
             EventHandler<MessageFlagsChangedEventArgs> MessageFlagsChanged);
         private async Task IdleLoopIterationAsync(Func<MimeMessage, Task> onNewMessage, CancellationToken token)
         {
-            if (!_client.IsConnected)
-                await EnsureConnectedAsync(token).ConfigureAwait(false);
-
             var folder = await ResolveAndOpenFolderAsync(null, FolderAccess.ReadWrite, token).ConfigureAwait(false);
             var initialCount = folder.Count;
 
             CheckAndResetUidValidity(folder);
             await InitializeLastUidIfNeededAsync(folder).ConfigureAwait(false);
 
-            // Recovery sync: after a network blip the server may have queued new mail
-            // while no IDLE event reached us. Do one explicit scan immediately after
-            // reconnecting so the latest unread message is not silently missed.
-            var supportsIdle = _client.Capabilities.HasFlag(ImapCapabilities.Idle);
-            await CheckAndProcessNewMessageAsync(folder, supportsIdle, onNewMessage, token).ConfigureAwait(false);
+            // After a reconnect the server may have new mail that no IDLE event
+            // reported. Scan once now so we do not miss it.
+            await CheckAndProcessNewMessageAsync(folder, onNewMessage, token).ConfigureAwait(false);
 
             var sessionId = StartMailCheckSession(folder);
             using var folderEventToken = new CancellationTokenSource();
@@ -35,7 +29,7 @@ namespace p2poolmail
 
             try
             {
-                await WaitForMailAsync(folder, token, folderEventToken.Token, sessionId).ConfigureAwait(false);
+                await WaitForMailAsync(folder, token, folderEventToken.Token).ConfigureAwait(false);
             }
             finally
             {
@@ -43,7 +37,7 @@ namespace p2poolmail
             }
 
             LogFolderChange(folder, initialCount);
-            await CheckAndProcessNewMessageAsync(folder, supportsIdle, onNewMessage, token).ConfigureAwait(false);
+            await CheckAndProcessNewMessageAsync(folder, onNewMessage, token).ConfigureAwait(false);
         }
 
         private FolderEventHandlers SubscribeFolderHandlers(IMailFolder folder, CancellationTokenSource folderEventToken, string sessionId)
@@ -90,33 +84,31 @@ namespace p2poolmail
             catch (Exception ex) { _logger?.Invoke($"Failed to unsubscribe from {eventName}: {ex.Message}"); }
         }
 
+        /// <summary>
+        /// Sets the watermark to the newest existing message so old mail is skipped
+        /// at startup. Errors must not be swallowed here: without a watermark the
+        /// scan below would treat old unread mail as new.
+        /// </summary>
         private async Task InitializeLastUidIfNeededAsync(IMailFolder folder)
         {
-            if (_skippedExistingUnreadAtStartup)
+            if (_existingMailSkipped)
                 return;
 
-            try
+            if (folder.Count > 0)
             {
-                if (folder.Count > 0)
+                var lastSummary = (await folder.FetchAsync(folder.Count - 1, folder.Count - 1, MessageSummaryItems.UniqueId).ConfigureAwait(false)).FirstOrDefault();
+                if (lastSummary != null)
                 {
-                    var lastSummary = (await folder.FetchAsync(folder.Count - 1, folder.Count - 1, MessageSummaryItems.UniqueId).ConfigureAwait(false)).FirstOrDefault();
-                    if (lastSummary != null)
-                    {
-                        _lastProcessedUid = lastSummary.UniqueId;
-                        _logger?.Invoke($"Initialized: skip existing messages up to UID {_lastProcessedUid}");
-                    }
+                    _lastProcessedUid = lastSummary.UniqueId;
+                    _logger?.Invoke($"Initialized: skip existing messages up to UID {_lastProcessedUid}");
                 }
-                else
-                {
-                    _logger?.Invoke("Folder empty at startup");
-                }
+            }
+            else
+            {
+                _logger?.Invoke("Folder empty at startup");
+            }
 
-                _skippedExistingUnreadAtStartup = true;
-            }
-            catch (Exception ex)
-            {
-                _logger?.Invoke($"Failed to initialize last UID: {ex.Message}");
-            }
+            _existingMailSkipped = true;
         }
 
         private void CheckAndResetUidValidity(IMailFolder folder)
@@ -132,7 +124,7 @@ namespace p2poolmail
 
             _logger?.Invoke($"UIDVALIDITY changed ({_lastUidValidity.Value} → {folder.UidValidity}) - resetting processing state");
             _lastProcessedUid = null;
-            _skippedExistingUnreadAtStartup = false;
+            _existingMailSkipped = false;
             _lastUidValidity = folder.UidValidity;
         }
 

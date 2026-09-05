@@ -131,7 +131,7 @@ internal sealed class EmailSender : IAsyncDisposable
             return;
 
         var delay = MinSendInterval - TimeSpan.FromMilliseconds(elapsed);
-        CommonHelper.WriteDebug($"SMTP: rate limiting, waiting {delay.TotalMilliseconds:F0}ms");
+        CommonHelper.WriteLine($"SMTP: rate limiting, waiting {delay.TotalMilliseconds:F0}ms");
         await Task.Delay(delay, cancellation).ConfigureAwait(false);
     }
 
@@ -139,7 +139,7 @@ internal sealed class EmailSender : IAsyncDisposable
     {
         if (await TryReuseAsync(cancellation).ConfigureAwait(false) is { } reused)
         {
-            CommonHelper.WriteDebug("SMTP: reusing existing connection");
+            CommonHelper.WriteLine("SMTP: reusing existing connection");
             return reused;
         }
 
@@ -149,7 +149,7 @@ internal sealed class EmailSender : IAsyncDisposable
         var socket = await DialHostAsync(cancellation).ConfigureAwait(false);
         try
         {
-            CommonHelper.WriteDebug($"SMTP: connecting to {_smtp.host}:{_smtp.port} (useSsl={_smtp.useSsl})");
+            CommonHelper.WriteLine($"SMTP: connecting to {_smtp.host}:{_smtp.port} (useSsl={_smtp.useSsl})");
             // Hand the already-dialed socket to MailKit; _smtp.host is still used
             // for TLS SNI and certificate validation.
             await client.ConnectAsync(socket, _smtp.host, _smtp.port, SocketOptions(), cancellation).ConfigureAwait(false);
@@ -160,11 +160,11 @@ internal sealed class EmailSender : IAsyncDisposable
             }
             else
             {
-                CommonHelper.WriteDebug("SMTP: connected (no authentication)");
+                CommonHelper.WriteLine("SMTP: connected (no authentication)");
             }
             _client = client;
             _lastOk = Environment.TickCount64;
-            CommonHelper.WriteDebug("SMTP: connection established");
+            CommonHelper.WriteLine("SMTP: connection established");
             return client;
         }
         catch (Exception ex)
@@ -201,7 +201,7 @@ internal sealed class EmailSender : IAsyncDisposable
             var socket = new Socket(family, SocketType.Stream, ProtocolType.Tcp);
             try
             {
-                CommonHelper.WriteDebug($"SMTP: dialing {ip}:{_smtp.port} ({(family == AddressFamily.InterNetwork ? "IPv4" : "IPv6")})");
+                CommonHelper.WriteLine($"SMTP: dialing {ip}:{_smtp.port} ({(family == AddressFamily.InterNetwork ? "IPv4" : "IPv6")})");
                 using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
                 cts.CancelAfter(PerAddressConnectTimeoutMs);
                 await socket.ConnectAsync(ip, _smtp.port, cts.Token).ConfigureAwait(false);
@@ -243,7 +243,7 @@ internal sealed class EmailSender : IAsyncDisposable
         var idleMs = Environment.TickCount64 - _lastOk;
         if (idleMs < NoOpAfter.TotalMilliseconds)
         {
-            CommonHelper.WriteDebug("SMTP: reusing client without NoOp");
+            CommonHelper.WriteLine("SMTP: reusing client without NoOp");
             return client;
         }
 
@@ -253,7 +253,7 @@ internal sealed class EmailSender : IAsyncDisposable
             cts.CancelAfter(TimeSpan.FromSeconds(5));
             await client.NoOpAsync(cts.Token).ConfigureAwait(false);
             _lastOk = Environment.TickCount64;
-            CommonHelper.WriteDebug($"SMTP: NoOp succeeded after {idleMs / 1000.0:F0}s idle, reusing client");
+            CommonHelper.WriteLine($"SMTP: NoOp succeeded after {idleMs / 1000.0:F0}s idle, reusing client");
             return client;
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
@@ -271,9 +271,11 @@ internal sealed class EmailSender : IAsyncDisposable
 
     private SecureSocketOptions SocketOptions()
     {
-        if (!_smtp.useSsl)
-            return SecureSocketOptions.None;
-        return SecureSocketOptions.SslOnConnect;
+        if (_smtp.useSsl)
+            return SecureSocketOptions.SslOnConnect;   // implicit TLS, usually port 465
+        if (_smtp.startTls)
+            return SecureSocketOptions.StartTls;       // plain connect, then upgrade, usually port 587
+        return SecureSocketOptions.None;
     }
 
     private async Task DisconnectAsync()
@@ -284,7 +286,7 @@ internal sealed class EmailSender : IAsyncDisposable
 
         try
         {
-            CommonHelper.WriteDebug("SMTP: disconnecting client");
+            CommonHelper.WriteLine("SMTP: disconnecting client");
             if (client.IsConnected)
             {
                 using var cts = new CancellationTokenSource(DisconnectTimeout);
@@ -295,7 +297,7 @@ internal sealed class EmailSender : IAsyncDisposable
         finally
         {
             client.Dispose();
-            CommonHelper.WriteDebug("SMTP: client disposed");
+            CommonHelper.WriteLine("SMTP: client disposed");
         }
     }
 

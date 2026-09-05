@@ -9,7 +9,7 @@ namespace p2poolmail
     /// <c>Connection</c> (connect/auth/folder access), <c>Idle</c> (IDLE loop) and
     /// <c>Messages</c> (fetch/process mail).
     /// </summary>
-    public partial class ImapClientService : IDisposable
+    public sealed partial class ImapClientService : IDisposable
     {
         private enum ImapRunState
         {
@@ -28,28 +28,29 @@ namespace p2poolmail
         private readonly Action<string>? _logger;
         private readonly bool _ignoreCertificateErrors;
 
-        private ImapClient _client;
+        // MailKit ImapClient is NOT thread-safe. A single SyncRoot gate serializes
+        // all client access (connect, idle, fetch, disconnect) to prevent races
+        // between the IDLE loop and external calls (e.g., StopIdleAsync).
+        private readonly SemaphoreSlim _syncRoot = new(1, 1);
+        // Serializes StartIdleAsync/StopIdleAsync so two callers cannot create two loops.
+        private readonly object _idleLifecycleLock = new();
+        private readonly ImapClient _client;
         private CancellationTokenSource? _idleCts;
         private Task? _idleTask;
         private ImapRunState _state = ImapRunState.Disconnected;
-        private bool _skippedExistingUnreadAtStartup;
+        private bool _existingMailSkipped;
         private UniqueId? _lastProcessedUid;
 
         // IDLE heartbeat (provider-friendly): keeps connection alive and checks for mail.
-        // Maximum delay for new message detection. Extended to 10 minutes as requested.
-        private TimeSpan _idleHeartbeat = TimeSpan.FromSeconds(600);
-        
-        // Reconnect immediately for network recovery: no delay/backoff, so new mail is
-        // not held up by a deliberate reconnect gap after a transient IMAP failure.
-        private TimeSpan _idleMaxRetryDelay = TimeSpan.Zero;
-        
-        // Timeout for NOOP keep-alive commands to prevent permanent hangs.
-        private TimeSpan _noapTimeout = TimeSpan.FromSeconds(10);
+        // This is a SAFETY NET only - real-time message detection relies on server push
+        // via IMAP IDLE (RFC 2177). When a new message arrives, the server sends an
+        // EXISTS notification immediately, and we process it without waiting for heartbeat.
+        // 10 minutes is server-friendly for 24/7 operation while staying well within
+        // the 30-minute idle timeout used by most IMAP servers.
+        private TimeSpan _idleHeartbeat = DefaultHeartbeat;
+
         private int _idleFailureCount;
-        // Track the UID currently being processed to avoid duplicate handling if server
-        // emits notification before watermark is advanced.
-        private UniqueId? _inFlightUid;
-        /// <summary>UIDVALIDITY of INBOX at the time <see cref="_lastProcessedUid"/> was captured. A change invalidates all UIDs.</summary>
+        /// <summary>UIDVALIDITY at the time <see cref="_lastProcessedUid"/> was captured. A change invalidates all UIDs.</summary>
         private uint? _lastUidValidity;
 
         public ImapClientService(string host, int port = 993, bool useSsl = true, string? username = null, string? password = null, Action<string>? logger = null, bool ignoreCertificateErrors = false, TimeSpan? idleHeartbeat = null)
@@ -86,11 +87,33 @@ namespace p2poolmail
             catch { }
         }
 
+        /// <summary>
+        /// Acquires the SyncRoot gate with a timeout. Returns true if acquired.
+        /// </summary>
+        private async Task<bool> AcquireLockAsync(CancellationToken cancellationToken)
+        {
+            try
+            {
+                return await _syncRoot.WaitAsync(ConnectionLockTimeout, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                return false;
+            }
+        }
+
+        private bool _disposed;
+
         public void Dispose()
         {
+            if (_disposed)
+                return;
+            _disposed = true;
+
             try { StopIdleAsync().GetAwaiter().GetResult(); } catch { }
-            try { if (_client.IsConnected) _client.Disconnect(true); } catch { }
+            DisconnectQuiet();
             _client.Dispose();
+            _syncRoot.Dispose();
         }
     }
 }

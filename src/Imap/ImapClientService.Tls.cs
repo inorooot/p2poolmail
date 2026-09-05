@@ -11,16 +11,10 @@ namespace p2poolmail
         {
             var client = new ImapClient();
 
-            // MailKit performs online revocation (CRL/OCSP) checking during the TLS
-            // handshake. The revocation data is fetched over plain HTTP and the fetch
-            // often fails on this network (IPv6 black hole: DNS returns IPv6 addresses
-            // that cannot connect, and .NET dials sequentially with no per-address
-            // timeout), failing every handshake with "unable to get certificate CRL"
-            // even though the certificate chain is perfectly sound (verified live:
-            // OnlineRevocation -> OfflineRevocation/RevocationStatusUnknown; NoCheck ->
-            // clean handshake in ~1s). Disabling revocation here keeps trust, hostname
-            // and validity checks fully enforced; the callback below still rejects
-            // chains that do not validate. A MITM is therefore still detected.
+            // MailKit checks certificate revocation (CRL/OCSP) during the TLS
+            // handshake. The CRL fetch often fails on restricted networks and then
+            // breaks every handshake, even with a sound chain. Trust, hostname and
+            // validity checks stay enforced.
             client.CheckCertificateRevocation = false;
 
             client.ServerCertificateValidationCallback = (_, certificate, chain, sslPolicyErrors) =>
@@ -28,14 +22,9 @@ namespace p2poolmail
                 if (sslPolicyErrors == SslPolicyErrors.None)
                     return true;
 
-                // Revocation data (CRL/OCSP) is fetched over plain HTTP during the TLS
-                // handshake. On this network such fetches often fail (IPv6 black hole:
-                // addresses resolve but cannot connect, and .NET dials sequentially),
-                // which fails the handshake with "unable to get certificate CRL" even
-                // though the certificate chain is perfectly sound. Re-validate the
-                // chain with revocation checks disabled; accept only if it is then
-                // fully valid — trust, expiration and (via sslPolicyErrors) hostname
-                // checks are still enforced, so a MITM is still rejected.
+                // Re-validate the chain without revocation checks. Accept it only if
+                // it is then fully valid. Trust, expiration and hostname checks are
+                // still enforced, so a MITM is still rejected.
                 if (sslPolicyErrors == SslPolicyErrors.RemoteCertificateChainErrors
                     && certificate is X509Certificate2 cert)
                 {
@@ -46,7 +35,7 @@ namespace p2poolmail
                         if (noRevocation.Build(cert)
                             && noRevocation.ChainStatus.All(s => s.Status == X509ChainStatusFlags.NoError))
                         {
-                            _logger?.Invoke($"IMAP TLS for {_host}:{_port}: certificate chain valid, CRL fetch failed - revocation check skipped");
+                            _logger?.Invoke($"IMAP TLS for {_host}:{_port}: chain valid, CRL fetch failed - revocation check skipped");
                             return true;
                         }
                     }

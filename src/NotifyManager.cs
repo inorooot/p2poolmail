@@ -23,7 +23,7 @@ internal static class NotifyManager
         // check entirely, delaying or suppressing recovery emails while other,
         // unrelated faults kept logging.
         // Ordering is safe: alert lines extend slot.LastSeen via ObserveAlert below.
-        Notification.TryResume(CommonHelper.timestampUtc);
+        Notification.TryResume(CommonHelper.TimestampUtc);
 
         if (!line.ContainsAny(Prefix))
             return;
@@ -50,7 +50,7 @@ internal static class NotifyManager
 
         if (Notification.CategoryOf(type) == Notification.Category.Alert)
            //alert
-            Notification.ObserveAlert(type, CommonHelper.timestampUtc);
+            Notification.ObserveAlert(type, CommonHelper.TimestampUtc);
         else
             //event
             EmailQueue.Enqueue(Notification.GetSubject(type), CommonHelper.ParseLogLine(line,CommonHelper.LogParseFields.Content));
@@ -68,8 +68,8 @@ internal static class NotifyManager
 
             try
             {
-                var subject = $"{EmailIcons.Workers} Worker online count: {prev} -> {cur}";
-                // timestampUtc is a unix-seconds long; convert before applying the ":u" format,
+                var subject = $"Worker online count: {prev} -> {cur}";
+                // TimestampUtc is a unix-seconds long; convert before applying the ":u" format,
                 // otherwise interpolation throws FormatException and the mail is silently lost.
                 var body = $"\n{EmailIcons.Workers} Previous: {prev}\n{EmailIcons.Workers} Current: {cur}\nTrend: {trend}\n";
                 EmailQueue.Enqueue(subject, body, "smoothed-count");
@@ -201,7 +201,7 @@ internal static class NotifyManager
             if (ok == isDown)
             {
                 isDown = !ok;
-                CommonHelper.WriteLine($"keepalive: {url} is {(ok ? "ok" : "FAILED")} at {DateTimeOffset.FromUnixTimeSeconds(CommonHelper.timestampUtc):u}");
+                CommonHelper.WriteLine($"keepalive: {url} is {(ok ? "ok" : "FAILED")} at {DateTimeOffset.FromUnixTimeSeconds(CommonHelper.TimestampUtc):u}");
             }
 
             try
@@ -301,7 +301,7 @@ internal static class NotifyManager
 
             try
             {
-                Stats.Daily_stats();
+                Stats.SendDailyStatsReport();
             }
             catch (Exception ex)
             {

@@ -2,10 +2,10 @@ using MailKit;
 
 namespace p2poolmail
 {
-    /// <summary>Mail waiting of <see cref="ImapClientService"/>: IMAP IDLE with heartbeat, polling fallback and backoff.</summary>
+    /// <summary>Mail waiting of <see cref="ImapClientService"/>: IMAP IDLE with heartbeat keep-alive.</summary>
     public partial class ImapClientService
     {
-        private async Task WaitForMailAsync(IMailFolder folder, CancellationToken token, CancellationToken folderEventToken, string? sessionId = null)
+        private async Task WaitForMailAsync(IMailFolder folder, CancellationToken token, CancellationToken folderEventToken)
         {
             SetState(ImapRunState.Idle);
             await WaitWithIdleAsync(folder, folderEventToken, token, _idleHeartbeat).ConfigureAwait(false);
@@ -15,81 +15,58 @@ namespace p2poolmail
         {
             var idleTimeout = heartbeat ?? _idleHeartbeat;
 
+            _logger?.Invoke($"IDLE: entering mode on {folder.FullName} ({_host}:{_port}), heartbeat={idleTimeout.TotalSeconds:F0}s");
+
+            // One linked token covers both wake-up sources: server event and heartbeat.
+            using var linkedToken = CancellationTokenSource.CreateLinkedTokenSource(folderEventToken, cancellationToken);
+            linkedToken.CancelAfter(idleTimeout);
+
             try
             {
-                _logger?.Invoke($"IDLE: entering mode on {folder.FullName} ({_host}:{_port}), heartbeat={idleTimeout.TotalSeconds:F0}s");
-
-                // Single linked token: fold both cancellation sources (server event + heartbeat)
-                // Pass only linkedToken to IdleAsync to avoid token conflict issues
-                using var linkedToken = CancellationTokenSource.CreateLinkedTokenSource(folderEventToken, cancellationToken);
-                linkedToken.CancelAfter(idleTimeout);
-
-                try
-                {
-                    // Pass only linkedToken, not both linkedToken.Token and cancellationToken
-                    // This prevents double-cancellation issues and simplifies cleanup
-                    await _client.IdleAsync(linkedToken.Token).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                {
-                    throw; // External shutdown - propagate immediately
-                }
-                catch (OperationCanceledException)
-                {
-                    // Determine cancellation cause: heartbeat vs server event
-                    await HandleIdleWakeAsync(folderEventToken, idleTimeout, cancellationToken).ConfigureAwait(false);
-                    return;
-                }
-
-                // Returned normally - determine the cause
-                if (folderEventToken.IsCancellationRequested)
-                {
-                    _logger?.Invoke("IDLE: received server notification, checking messages");
-                    ResetIdleState();
-                }
-                else
-                {
-                    _logger?.Invoke($"IDLE: heartbeat after {idleTimeout.TotalSeconds:F0}s, checking messages");
-                    await KeepAliveAsync(cancellationToken).ConfigureAwait(false);
-                }
+                await _client.IdleAsync(linkedToken.Token).ConfigureAwait(false);
+                await OnIdleWakeAsync(folderEventToken, cancellationToken, idleTimeout).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw; // External shutdown - propagate immediately
             }
             catch (OperationCanceledException)
             {
-                throw;
+                // Canceled by heartbeat or server event, not by shutdown.
+                await OnIdleWakeAsync(folderEventToken, cancellationToken, idleTimeout).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
-                await HandleIdleFailureAsync(ex, cancellationToken).ConfigureAwait(false);
+                _logger?.Invoke($"IDLE error: {ex.GetType().Name}: {ex.Message}");
+                throw;
             }
         }
 
-        private async Task HandleIdleWakeAsync(CancellationToken folderEventToken, TimeSpan idleTimeout, CancellationToken cancellationToken)
+        private async Task OnIdleWakeAsync(CancellationToken folderEventToken, CancellationToken cancellationToken, TimeSpan idleTimeout)
         {
             if (folderEventToken.IsCancellationRequested)
             {
                 _logger?.Invoke("IDLE: received server notification, checking messages");
-                ResetIdleState();
+                _idleFailureCount = 0;
+                return;
             }
-            else
-            {
-                _logger?.Invoke($"IDLE: heartbeat after {idleTimeout.TotalSeconds:F0}s, checking messages");
-                await KeepAliveAsync(cancellationToken).ConfigureAwait(false);
-            }
+
+            _logger?.Invoke($"IDLE: heartbeat after {idleTimeout.TotalSeconds:F0}s, checking messages");
+            await KeepAliveAsync(cancellationToken).ConfigureAwait(false);
         }
 
-        private void ResetIdleState()
-        {
-            _idleFailureCount = 0;
-        }
-
+        /// <summary>
+        /// Sends a NOOP keep-alive to verify the connection is still alive.
+        /// Called during heartbeat cycles.
+        /// </summary>
         private async Task KeepAliveAsync(CancellationToken token)
         {
             try
             {
                 // Use explicit timeout to prevent NOOP from hanging indefinitely
                 using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(token);
-                timeoutCts.CancelAfter(_noapTimeout);
-                
+                timeoutCts.CancelAfter(NoopTimeout);
+
                 await _client.NoOpAsync(timeoutCts.Token).ConfigureAwait(false);
                 _idleFailureCount = 0;
             }
@@ -99,41 +76,39 @@ namespace p2poolmail
             }
             catch (OperationCanceledException)
             {
-                // NOOP timeout expired
+                // NOOP timeout expired - connection is dead
                 SetState(ImapRunState.Reconnecting);
-                _logger?.Invoke($"IDLE heartbeat NOOP timeout ({_noapTimeout.TotalSeconds:F0}s), reconnecting");
-                await TryDisconnectAsync().ConfigureAwait(false);
+                _logger?.Invoke($"IDLE heartbeat NOOP timeout ({NoopTimeout.TotalSeconds:F0}s), reconnecting");
+                throw new InvalidOperationException("NOOP timeout - connection lost");
             }
             catch (Exception ex)
             {
                 SetState(ImapRunState.Reconnecting);
                 _logger?.Invoke($"IDLE heartbeat NOOP failed ({ex.GetType().Name}), reconnecting");
-                await TryDisconnectAsync().ConfigureAwait(false);
+                throw new InvalidOperationException($"NOOP failed: {ex.Message}", ex);
             }
-        }
-
-        private async Task HandleIdleFailureAsync(Exception ex, CancellationToken token)
-        {
-            SetState(ImapRunState.Reconnecting);
-            _idleFailureCount++;
-
-            _logger?.Invoke($"IDLE: failed on attempt #{_idleFailureCount}: {ex.GetType().Name}; reconnecting immediately");
-
-            await KeepAliveAsync(token).ConfigureAwait(false);
         }
 
         public async Task StopIdleAsync()
         {
-            try
+            Task? idleTask;
+            lock (_idleLifecycleLock)
             {
                 TryCancel(_idleCts);
-                if (_idleTask != null)
-                    await _idleTask.ConfigureAwait(false);
+                idleTask = _idleTask;
             }
-            catch { }
-            finally
+
+            if (idleTask != null)
             {
-                CleanupIdleResources();
+                try { await idleTask.ConfigureAwait(false); }
+                catch { /* the loop logs its own errors */ }
+            }
+
+            lock (_idleLifecycleLock)
+            {
+                // Only clean up if no new loop was started in the meantime.
+                if (_idleTask == idleTask)
+                    CleanupIdleResources();
             }
         }
 

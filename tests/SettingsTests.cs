@@ -3,6 +3,7 @@ using p2poolmail;
 namespace Tests;
 
 // <summary>Tests TOML config loading with a temporary config file.</summary>
+[Collection("GlobalState")]
 public class SettingsTests : IDisposable
 {
     private readonly string _path = Path.Combine(Path.GetTempPath(), $"p2poolmail.test.{Guid.NewGuid():N}.toml");

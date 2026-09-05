@@ -9,6 +9,9 @@ namespace Tests;
 /// Unit tests for the SMTP pipeline: configuration validation, message
 /// construction, envelope rules and TLS policy mapping.
 /// </summary>
+// Reads/writes the global Settings/EmailQueue statics - must not run in
+// parallel with SettingsTests (xUnit default is per-class parallelism).
+[Collection("GlobalState")]
 public class SmtpPipelineTests : IDisposable
 {
     private readonly string _path = Path.Combine(Path.GetTempPath(), $"p2poolmail.smtptest.{Guid.NewGuid():N}.toml");

@@ -7,19 +7,29 @@ namespace p2poolmail
     /// <summary>Mail processing of <see cref="ImapClientService"/>: process new messages, mark as seen.</summary>
     public partial class ImapClientService
     {
-        private async Task CheckAndProcessNewMessageAsync(IMailFolder folder, bool isIdle, Func<MimeMessage, Task> onNewMessage, CancellationToken cancellationToken)
+        /// <summary>
+        /// Processes only the newest unread message above the watermark; older
+        /// unread messages are skipped on purpose (single-reply semantics).
+        /// Uses a server-side search so a later seen message cannot hide the
+        /// newest unread one.
+        /// </summary>
+        private async Task CheckAndProcessNewMessageAsync(IMailFolder folder, Func<MimeMessage, Task> onNewMessage, CancellationToken cancellationToken)
         {
             try
             {
-                var latestUid = await GetLatestUnreadUidAsync(folder, cancellationToken).ConfigureAwait(false);
-                if (!latestUid.HasValue)
+                var unread = await GetUnreadUidsAboveWatermarkAsync(folder, cancellationToken).ConfigureAwait(false);
+
+                if (unread.Count == 0)
                 {
                     if (!_lastProcessedUid.HasValue)
                         _logger?.Invoke("No unread messages (initialization)");
                     return;
                 }
 
-                await ProcessMessageAsync(folder, latestUid.Value, onNewMessage, cancellationToken).ConfigureAwait(false);
+                // Only the newest unread message is processed (single-reply semantics).
+                // MaxBy is safe here: unread.Count > 0 was checked above.
+                var latest = unread.MaxBy(u => u.Id);
+                await ProcessMessageAsync(folder, latest, onNewMessage, cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -33,25 +43,17 @@ namespace p2poolmail
 
         private async Task ProcessMessageAsync(IMailFolder folder, UniqueId uid, Func<MimeMessage, Task> onNewMessage, CancellationToken cancellationToken)
         {
-            if (_inFlightUid == uid)
-            {
-                _logger?.Invoke($"Skipping duplicate in-flight UID {uid}");
-                return;
-            }
-
-            _inFlightUid = uid;
-
             try
             {
-                _logger?.Invoke($"Processing message: UID {uid} (lastProcessed: {_lastProcessedUid})");
                 var message = await folder.GetMessageAsync(uid, cancellationToken).ConfigureAwait(false);
-                _logger?.Invoke($"Callback for: {message.Subject}");
+                _logger?.Invoke($"Processing: UID {uid}, Subject: {message.Subject}");
                 await onNewMessage(message).ConfigureAwait(false);
 
-                // Advance watermark before marking as seen:
-                // if flagging fails, at least we won't replay the message.
-                _lastProcessedUid = uid;
+                // Mark as seen BEFORE advancing the watermark: if marking fails, the
+                // watermark stays put and the message is retried on a later wake
+                // (at worst a duplicate reply) instead of being lost.
                 await folder.AddFlagsAsync([uid], MessageFlags.Seen, silent: true, cancellationToken).ConfigureAwait(false);
+                AdvanceWatermark(uid);
             }
             catch (OperationCanceledException)
             {
@@ -61,51 +63,44 @@ namespace p2poolmail
             {
                 _logger?.Invoke($"Error processing UID {uid}: {ex.GetType().Name} - {ex.Message}");
             }
-            finally
-            {
-                _inFlightUid = null;
-            }
         }
 
-        private async Task<UniqueId?> GetLatestUnreadUidAsync(IMailFolder folder, CancellationToken cancellationToken)
+        /// <summary>
+        /// Returns the UIDs of all unread messages newer than the watermark.
+        /// UIDs are only valid within one UIDVALIDITY epoch; that reset is handled
+        /// by <c>CheckAndResetUidValidity</c> before this runs.
+        /// </summary>
+        private async Task<IReadOnlyList<UniqueId>> GetUnreadUidsAboveWatermarkAsync(IMailFolder folder, CancellationToken cancellationToken)
         {
-            var unreadUids = await folder.SearchAsync(SearchQuery.NotSeen, cancellationToken).ConfigureAwait(false);
+            if (folder.Count == 0)
+                return Array.Empty<UniqueId>();
 
-            if (unreadUids.Count == 0)
-                return null;
+            var unread = await folder.SearchAsync(SearchQuery.NotSeen, cancellationToken).ConfigureAwait(false);
+            if (unread.Count == 0)
+                return Array.Empty<UniqueId>();
 
-            if (!_lastUidValidity.HasValue || folder.UidValidity == _lastUidValidity.Value)
+            if (!_lastProcessedUid.HasValue)
+                return [.. unread];
+
+            var aboveWatermark = new List<UniqueId>();
+            foreach (var uid in unread)
             {
-                _lastUidValidity = folder.UidValidity;
-                return FindLatestUid(unreadUids);
+                if (uid.Id > _lastProcessedUid.Value.Id)
+                    aboveWatermark.Add(uid);
             }
-
-            // UIDVALIDITY changed - reset state and start fresh
-            _logger?.Invoke($"UIDVALIDITY changed ({_lastUidValidity.Value} → {folder.UidValidity}) - resetting watermark");
-            _lastProcessedUid = null;
-            _lastUidValidity = folder.UidValidity;
-            return FindLatestUid(unreadUids);
+            return aboveWatermark;
         }
 
-        private UniqueId? FindLatestUid(IEnumerable<UniqueId> uids)
+        /// <summary>
+        /// Advances the watermark to the given UID.
+        /// Only advances forward, never backward.
+        /// </summary>
+        private void AdvanceWatermark(UniqueId uid)
         {
-            UniqueId? latest = null;
-            uint maxId = _lastProcessedUid?.Id ?? 0;
-
-            foreach (var uid in uids)
+            if (!_lastProcessedUid.HasValue || uid.Id > _lastProcessedUid.Value.Id)
             {
-                if (uid.Id > maxId)
-                {
-                    maxId = uid.Id;
-                    latest = uid;
-                }
+                _lastProcessedUid = uid;
             }
-
-            if (latest.HasValue)
-                _logger?.Invoke($"Found latest unread: UID {latest}");
-
-            return latest;
         }
-
     }
 }

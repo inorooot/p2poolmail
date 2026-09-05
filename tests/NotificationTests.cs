@@ -102,9 +102,6 @@ public class NotificationTests
 
         Assert.True(IsFault(Notification.Type.ZMQNotRunning));
     }
-    /// <summary>
-    /// 
-    /// </summary>
     [Fact]
     public void TryResume_FaultUnseenBeyondWindow_Resets()
     {

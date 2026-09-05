@@ -7,7 +7,7 @@ using System.Text.Json;
 
 namespace p2poolmail;
 
-public class CommonHelper
+internal class CommonHelper
 {
     #region read json field use Utf8JsonReader
      
@@ -292,14 +292,8 @@ public class CommonHelper
 
         // Step 2: After the double-space, find the timestamp (ends at the Subject token)
         var afterLevel = span.Slice(levelEnd + 2).TrimStart();
-        
-        // Timestamp format: "YYYY-MM-DD HH:mm:ss.ffff" (23 chars + space)
-        // Find the end of timestamp: it's followed by a space and then the Subject
-        int timestampEnd = afterLevel.IndexOf(' ');
-        if (timestampEnd < 0)
-            return string.Empty;
 
-        // Include the time part: find the second space (after date) then the next space after time
+        // Timestamp format: "YYYY-MM-DD HH:mm:ss.ffff" (23 chars + space)
         int dateSpace = afterLevel.IndexOf(' ');
         if (dateSpace < 0)
             return string.Empty;
@@ -498,30 +492,37 @@ public class CommonHelper
         }
     }
 
-    private static string FormatConsoleMessage(string color, string level, string message)
+    // ANSI colors are suppressed when stdout/stderr is redirected (e.g. systemd),
+    // so escape sequences never pollute redirected logs.
+    private static readonly bool ColorStdout = !Console.IsOutputRedirected;
+    private static readonly bool ColorStderr = !Console.IsErrorRedirected;
+
+    private static string FormatConsoleMessage(string color, string level, string message, bool colorEnabled)
     {
         WriteToLogFile(level, message);
-        return $"{color}{FormatLogLine(level, message)}{ColorReset}";
+        return colorEnabled
+            ? $"{color}{FormatLogLine(level, message)}{ColorReset}"
+            : FormatLogLine(level, message);
     }
 
     public static void WriteLine(string message) =>
-        Console.WriteLine(FormatConsoleMessage(ColorViolet, "INFO", message));
+        Console.WriteLine(FormatConsoleMessage(ColorViolet, "Notice", message, ColorStdout));
 
     public static void WriteError(string message) =>
-        Console.Error.WriteLine(FormatConsoleMessage(ColorRose, "ERROR", message));
+        Console.Error.WriteLine(FormatConsoleMessage(ColorRose, "ERROR", message, ColorStderr));
 
     public static void WriteWarn(string message) =>
-        Console.Error.WriteLine(FormatConsoleMessage(ColorAmber, "WARN", message));
+        Console.Error.WriteLine(FormatConsoleMessage(ColorAmber, "WARN", message, ColorStderr));
 
-     
     public static void WriteSuccess(string message) =>
-        Console.WriteLine(FormatConsoleMessage(ColorLime, "OK", message));
+        Console.WriteLine(FormatConsoleMessage(ColorLime, "OK", message, ColorStdout));
 
     public static void WriteDebug(string message) =>
-        Console.WriteLine(FormatConsoleMessage(ColorGray, "DBG", message));
+        Console.WriteLine(FormatConsoleMessage(ColorGray, "DBG", message, ColorStdout));
 
     public static void WriteError(Exception ex) =>
-        Console.Error.WriteLine(FormatConsoleMessage(ColorRed, "ERROR", ex.ToString()));
+        Console.Error.WriteLine(FormatConsoleMessage(ColorRed, "ERROR", ex.ToString(), ColorStderr));
 
-    public static long timestampUtc { get { return DateTimeOffset.UtcNow.ToUnixTimeSeconds(); } set { } }
+    /// <summary>Current time as unix-seconds (UTC).</summary>
+    public static long TimestampUtc => DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 }

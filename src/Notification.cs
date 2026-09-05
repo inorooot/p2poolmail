@@ -57,12 +57,12 @@ internal static class Notification
     // Single source of truth; all notifications start enabled.
     private static readonly Spec[] Catalog =
     [
-        new(Type.ShareFound, Category.Event, "SHARE FOUND", $"{EmailIcons.ShareFound} SHARE FOUND", "{line}  "),
-        new(Type.GotaPayout, Category.Event, "got a payout", $"{EmailIcons.Payout} Got a Payout", "{line}  "),
-        new(Type.MonerodNotSynchronized, Category.Alert, "monerod is not synchronized", $"{EmailIcons.Warning} Monerod is not synchronized", $"{EmailIcons.Warning} P2Pool: Monerod is not synchronized "),
-        new(Type.MonerodBusySyncing, Category.Alert, "monerod is busy syncing", $"{EmailIcons.Warning} Monerod is busy syncing", $"{EmailIcons.Warning} P2pool: monerod is busy syncing "),
-        new(Type.ErrorEBADF, Category.Alert, "error EBADF", $"{EmailIcons.Alert} JSONRPCRequest error EBADF", $"{EmailIcons.Alert} JSONRPCRequest uv_poll_start returned error EBADF "),
-        new(Type.ZMQNotRunning, Category.Alert, "ZMQ is not running", $"{EmailIcons.Alert} ZMQ is not running", $"{EmailIcons.Alert} P2PServer ZMQ is not running ")
+        new(Type.ShareFound, Category.Event, "SHARE FOUND", "SHARE FOUND", "{line}  "),
+        new(Type.GotaPayout, Category.Event, "got a payout", "Got a Payout", "{line}  "),
+        new(Type.MonerodNotSynchronized, Category.Alert, "monerod is not synchronized", "Monerod is not synchronized", $"{EmailIcons.Warning} P2Pool: Monerod is not synchronized "),
+        new(Type.MonerodBusySyncing, Category.Alert, "monerod is busy syncing", "Monerod is busy syncing", $"{EmailIcons.Warning} P2pool: monerod is busy syncing "),
+        new(Type.ErrorEBADF, Category.Alert, "error EBADF", "JSONRPCRequest error EBADF", $"{EmailIcons.Alert} JSONRPCRequest uv_poll_start returned error EBADF "),
+        new(Type.ZMQNotRunning, Category.Alert, "ZMQ is not running", "ZMQ is not running", $"{EmailIcons.Alert} P2PServer ZMQ is not running ")
     ];
 
     public static readonly string[] Keywords;
@@ -161,7 +161,7 @@ internal static class Notification
             slot.Reset();
             EmailQueue.Enqueue(
                 EmailTemplates.RecoverySubject,
-                $"{EmailIcons.Ok} No recurrence of the \"{Catalog[i].Body}\". Condition may have cleared.",
+                $"{EmailIcons.Ok} No recurrence of \"{Catalog[i].Subject}\". Condition may have cleared.",
                 $"recoverid:{i}");
         }
     }

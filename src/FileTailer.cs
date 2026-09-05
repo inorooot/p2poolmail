@@ -12,8 +12,8 @@ namespace p2poolmail;
 internal sealed class FileTailer
 {
     private readonly string _path;
-    private const int _pollIntervalSeconds=3;
-    private const int _idleThresholdSeconds = 30;
+    private const int PollIntervalSeconds=3;
+    private const int IdleThresholdSeconds = 30;
 
     private FileStream? _stream;
     private long _readPosition;
@@ -33,11 +33,11 @@ internal sealed class FileTailer
     public FileTailer(string path)
     {
         _path = path ?? throw new ArgumentNullException(nameof(path));
-        //_pollIntervalSeconds = Math.Max(1, pollIntervalSeconds);
+        //PollIntervalSeconds = Math.Max(1, pollIntervalSeconds);
         _signal = new SemaphoreSlim(0, 1);
         _lineBuffer = ArrayPool<char>.Shared.Rent(1024);
         _lineBufferLength = 0;
-        _lastGrowthUnixSeconds = CommonHelper.timestampUtc;
+        _lastGrowthUnixSeconds = CommonHelper.TimestampUtc;
         _lastWriteUtc = DateTime.MinValue;
     }
 
@@ -62,7 +62,7 @@ internal sealed class FileTailer
             {
                 DisposeStream();
                 CommonHelper.WriteWarn($"Log file {_path} does not exist.");
-                await WaitSignalOrTimeout(TimeSpan.FromSeconds(_pollIntervalSeconds), ct).ConfigureAwait(false);
+                await WaitSignalOrTimeout(TimeSpan.FromSeconds(PollIntervalSeconds), ct).ConfigureAwait(false);
                 continue;
             }
 
@@ -71,7 +71,7 @@ internal sealed class FileTailer
                 EnsureStream();
                 if (_stream == null)
                 {
-                    await WaitSignalOrTimeout(TimeSpan.FromSeconds(_pollIntervalSeconds), ct).ConfigureAwait(false);
+                    await WaitSignalOrTimeout(TimeSpan.FromSeconds(PollIntervalSeconds), ct).ConfigureAwait(false);
                     continue;
                 }
 
@@ -79,7 +79,7 @@ internal sealed class FileTailer
                 if (CheckRotation(_readPosition, out var newPos))
                 {
                     _readPosition = newPos;
-                    await WaitSignalOrTimeout(TimeSpan.FromSeconds(_pollIntervalSeconds), ct).ConfigureAwait(false);
+                    await WaitSignalOrTimeout(TimeSpan.FromSeconds(PollIntervalSeconds), ct).ConfigureAwait(false);
                     continue;
                 }
 
@@ -89,19 +89,19 @@ internal sealed class FileTailer
                     len = _stream.Length;
                     if (_stream == null)
                     {
-                        await WaitSignalOrTimeout(TimeSpan.FromSeconds(_pollIntervalSeconds), ct).ConfigureAwait(false);
+                        await WaitSignalOrTimeout(TimeSpan.FromSeconds(PollIntervalSeconds), ct).ConfigureAwait(false);
                         continue;
                     }
                 }
 
                 if (len == _readPosition)
                 {
-                    var now = CommonHelper.timestampUtc;
-                    if (now - _lastGrowthUnixSeconds >= _idleThresholdSeconds)
+                    var now = CommonHelper.TimestampUtc;
+                    if (now - _lastGrowthUnixSeconds >= IdleThresholdSeconds)
                     { 
                         CommonHelper.WriteWarn($"No new-line in the log file , Is p2pool not running ?");
                     }
-                    await WaitSignalOrTimeout(TimeSpan.FromSeconds(_pollIntervalSeconds), ct).ConfigureAwait(false);
+                    await WaitSignalOrTimeout(TimeSpan.FromSeconds(PollIntervalSeconds), ct).ConfigureAwait(false);
                     continue;
                 }
 
@@ -111,7 +111,7 @@ internal sealed class FileTailer
                     continue;
                 }
 
-                await WaitSignalOrTimeout(TimeSpan.FromSeconds(_pollIntervalSeconds), ct).ConfigureAwait(false);
+                await WaitSignalOrTimeout(TimeSpan.FromSeconds(PollIntervalSeconds), ct).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -127,6 +127,11 @@ internal sealed class FileTailer
 
         DisposeWatcher();
         DisposeStream();
+
+        // Return the pooled line buffer and release the wake-up signal.
+        ArrayPool<char>.Shared.Return(_lineBuffer);
+        _lineBuffer = Array.Empty<char>();
+        _signal.Dispose();
     }
 
     private void SignalWake()
@@ -206,7 +211,7 @@ internal sealed class FileTailer
         }
         catch { }
 
-        _lastGrowthUnixSeconds = CommonHelper.timestampUtc;
+        _lastGrowthUnixSeconds = CommonHelper.TimestampUtc;
     }
 
     private void HandleTruncation()
@@ -217,7 +222,7 @@ internal sealed class FileTailer
         _readPosition = 0;
         _lineBufferLength = 0;
         _decoder.Reset();
-        _lastGrowthUnixSeconds = CommonHelper.timestampUtc;
+        _lastGrowthUnixSeconds = CommonHelper.TimestampUtc;
     }
 
     private async Task<bool> DrainAvailableAsync(byte[] buffer, CancellationToken ct)
@@ -235,7 +240,7 @@ internal sealed class FileTailer
 
             _readPosition += read;
             ProcessReadChunk(buffer, read);
-            _lastGrowthUnixSeconds = CommonHelper.timestampUtc;
+            _lastGrowthUnixSeconds = CommonHelper.TimestampUtc;
             try { _lastWriteUtc = new FileInfo(_path).LastWriteTimeUtc; } catch { }
             drainedAny = true;
         }
@@ -351,7 +356,7 @@ internal sealed class FileTailer
                 return false;
             }
 
-            _lastGrowthUnixSeconds = CommonHelper.timestampUtc;
+            _lastGrowthUnixSeconds = CommonHelper.TimestampUtc;
             _lastWriteUtc = writeTime;
 
             var currentLength = fi.Length;

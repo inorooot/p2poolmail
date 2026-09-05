@@ -151,7 +151,7 @@ public class ImapClientServiceTests : IDisposable
         Assert.Equal(Disconnected, state);
     }
 
-    // Removed: UID processing tests - logic consolidated into GetLatestUnreadUidAsync
+    // Removed: UID processing tests - logic consolidated into GetUnreadUidsAboveWatermarkAsync
 
     // ========== Default Values Tests ==========
 
@@ -166,12 +166,15 @@ public class ImapClientServiceTests : IDisposable
 
     // Removed: Default_CandidateLimit test - parameter no longer exists
 
+    // Removed: Default_IdleMaxRetryDelay test - reconnect backoff was removed by design
+
     [Fact]
-    public void Default_IdleMaxRetryDelay_IsZeroSeconds()
+    public async Task InitializeAsync_NullCallback_ThrowsArgumentNullException()
     {
         var service = new ImapClientService("imap.example.com", logger: _logger);
 
-        var maxRetryDelayField = typeof(ImapClientService).GetField("_idleMaxRetryDelay", BindingFlags.NonPublic | BindingFlags.Instance);
-        Assert.Equal(TimeSpan.Zero, maxRetryDelayField?.GetValue(service));
+        await Assert.ThrowsAsync<ArgumentNullException>(() => service.InitializeAsync(null!));
+
+        service.Dispose();
     }
 }

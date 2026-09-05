@@ -14,7 +14,7 @@ Get mining alerts and events automatically, or send an email anytime, anywhere t
 | Daemon      | JSONRPCRequest uv_poll_start returned error EBADF. | Same as above. |
 | Daemon      | P2PServer ZMQ is not running. | Same as above. |
 | Worker      | Previous:5 current:2 trend:Down | Smoothed worker count change confirmed for 5 s. |
-| Daily stats | Hello worker, Here's what happened in the last 24 hours:<br>Recevied    : 0.013581564721 XMR (6 payment(s))<br>Share found : 5<br>Current:<br>Total worker: 2<br>Hashrate_15m: 27.109 KH/s<br>Hashrate_1h: 26.939 KH/s<br>Hashrate_24h: 26.042 KH/s<br>Average effort: 37.197%<br>Current effort: 58.440% | Scheduled at `[daily_stats].time_of_day`, every 24 hours. |
+| Daily stats | Hello workers, Here's what happened in the last 24 hours:<br>Received    : 0.013581564721 XMR (6 payment(s))<br>Share found : 5<br>Current:<br>Total worker: 2<br>Hashrate_15m: 27.109 KH/s<br>Hashrate_1h: 26.939 KH/s<br>Hashrate_24h: 26.042 KH/s<br>Average effort: 37.197%<br>Current effort: 58.440% | Scheduled at `[daily_stats].time_of_day`, every 24 hours. |
 
 ### On-demand request
 
@@ -22,7 +22,7 @@ Besides automatic notifications, you can proactively request your latest mining 
 just send an email to the mailbox watched by `[imap_server]`, and p2poolmail will reply with a full statistics report.
 and when `[imap_server].reply_allowlist` is non-empty, only listed senders get a reply.
 
-# How it works
+## How it works
 
  It watches `p2pool.log` and the local mining statistics, and turns what it sees into plain emails. No database, no web UI — just set it up and check your inbox.
 
@@ -45,15 +45,16 @@ Update the paths and mail settings before starting the service:
 ```toml
 [p2pool_log]
 file_path = "/path/to/p2pool/p2pool.log" # Path to the P2Pool log file
-data_api_dir = "/path/to/data_api_dir/"  # point to the P2Pool data API directory， --data-api <data_api_dir>
+data_api_dir = "/path/to/data_api_dir/"  # Point to the P2Pool data API directory (--data-api <data_api_dir>)
 
 [smtp]
 host = "smtp.example.com"                # SMTP server hostname
-port = 465                           
-useSsl = true                             # Enable SSL for the SMTP connection
-username = "sender@example.com"          # SMTP login username
+port = 465
+useSsl = true                            # Implicit TLS (usually port 465)
+startTls = false                         # STARTTLS on a plain connection (usually port 587). Ignored when useSsl = true
+username = "sender@example.com"          # SMTP login username (also used as the From address)
 fromName = "p2poolmail"                  # Display name shown to recipients
-password = "YOUR_SMTP_CREDENTIAL"        # Use the credential required by your provider,OAuth2 unsupported
+password = "YOUR_SMTP_CREDENTIAL"        # Use the credential required by your provider (OAuth2 unsupported)
 
 [receiver]
 toAddress = "alerts@example.com"         # Address that receives notifications
@@ -66,10 +67,10 @@ worker_down_up = true                     # Notify when a worker goes up or down
 [imap_server]
 enable = false                            # Enable email-triggered statistics reports
 host = "imap.example.com"                 # IMAP server hostname
-port = 993                                 # IMAP port 
-useSsl = true                              # Enable SSL for the IMAP connection
+port = 993                                # IMAP port
+useSsl = true                             # Enable SSL for the IMAP connection
 username = "receiver@example.com"         # IMAP login username
-password = "YOUR_IMAP_CREDENTIAL"        # Use the credential required by your provider,OAuth2 unsupported
+password = "YOUR_IMAP_CREDENTIAL"        # Use the credential required by your provider (OAuth2 unsupported)
 
 [keepalive]
 enable_remote_ping = false                # Enable periodic requests to a remote URL
@@ -78,16 +79,10 @@ ping_url = ""                             # URL used when remote ping is enabled
 
 [daily_stats]
 enable = true                             # Enable scheduled daily statistics
-time_of_day = "18:00"                     # Local time for the  report (HH:mm)
+time_of_day = "18:00"                     # Local time for the report (HH:mm)
 frequency_hours = 24                      # No changes required
+```
 
-#Starts by default
-#[alter]
-#Monerod is not synchronized=true
-#Monerod is busy syncing=true
-#JSONRPCRequest error EBADF=true
-#P2PServer ZMQ is not running=true
-``` 
 ### Security notes
 
 - **Use a dedicated email account for p2poolmail.** It's best to create a brand-new mailbox just for the SMTP and IMAP services in this app, instead of reusing your personal email. This keeps your main inbox and credentials isolated: if anything leaks or gets misconfigured, only this throwaway account is affected.

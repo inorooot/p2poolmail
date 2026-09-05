@@ -79,6 +79,8 @@ internal sealed partial class Settings
         public string host { get; set; } = string.Empty;
         public int port { get; set; }
         public bool useSsl { get; set; }
+        /// <summary>Use STARTTLS on a plain connection (usually port 587). Ignored when useSsl is true.</summary>
+        public bool startTls { get; set; }
 
         // Optional username for SMTP authentication; if empty, fromAddress will be used.
         public string username { get; set; } = string.Empty;

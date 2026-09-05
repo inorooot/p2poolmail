@@ -4,7 +4,7 @@ namespace p2poolmail
 {
     internal sealed class Program
     {
-        private static readonly CancellationTokenSource CancellationTokenSource = new();
+        private static readonly CancellationTokenSource _shutdownCts = new();
 
         /// <summary>Subject that triggers a status reply (case-insensitive).</summary>
         private const string TriggerSubject = "hello";
@@ -12,6 +12,8 @@ namespace p2poolmail
         private static async Task<int> Main(string[] args)
         {
             Console.CancelKeyPress += OnCancelRequested;
+
+            CommonHelper.WriteLine($"p2poolmail v{AppVersion.Value} starting...");
 
             // Single-instance guard: named Mutex does NOT work under NativeAOT on Linux
             // (every process observed createdNew == true and several instances ran side
@@ -32,6 +34,18 @@ namespace p2poolmail
             try
             {
                 return await RunAsync(args);
+            }
+            catch (OperationCanceledException) when (_shutdownCts.IsCancellationRequested)
+            {
+                CommonHelper.WriteLine("Shutdown complete.");
+                return 0;
+            }
+            catch (Exception ex)
+            {
+                // Startup errors (bad config, SMTP settings incomplete) land here
+                // with a readable message instead of an unhandled stack trace.
+                CommonHelper.WriteError(ex.ToString());
+                return 1;
             }
             finally
             {
@@ -94,7 +108,7 @@ namespace p2poolmail
             // Keepalive: periodic healthchecks.io heartbeat from [keepalive] config (fire-and-forget; the loop handles its own exceptions).
             if (Settings.Current.keepalive.enable_remote_ping)
             {
-                _ = Task.Run(() => NotifyManager.KeepaliveLoopAsync(CancellationTokenSource.Token));
+                _ = Task.Run(() => NotifyManager.KeepaliveLoopAsync(_shutdownCts.Token));
                 CommonHelper.WriteLine("Keepalive heartbeat enabled");
             }
             else
@@ -105,7 +119,7 @@ namespace p2poolmail
             // Daily stats: scheduled mining summary report from [daily_stats] config (fire-and-forget; the loop handles its own exceptions).
             if (Settings.Current.daily_stats.enable)
             {
-                _ = Task.Run(() => NotifyManager.DailyStatsLoopAsync(CancellationTokenSource.Token));
+                _ = Task.Run(() => NotifyManager.DailyStatsLoopAsync(_shutdownCts.Token));
                 CommonHelper.WriteLine("Daily stats scheduler enabled");
             }
             else
@@ -146,12 +160,9 @@ namespace p2poolmail
 
             try
             {
-                if (!await imapService.InitializeAsync(OnNewMailAsync, CancellationTokenSource.Token))
-                {
-                    // InitializeAsync already logged the reason; continue without IMAP.
-                    imapService.Dispose();
-                    return null;
-                }
+                // InitializeAsync retries until connected; it only returns on
+                // success or throws when cancelled.
+                await imapService.InitializeAsync(OnNewMailAsync, _shutdownCts.Token);
                 return imapService;
             }
             catch (Exception ex)
@@ -199,7 +210,7 @@ namespace p2poolmail
             }
 
             var stats = NotifyManager.RequestByEmail();
-            EmailQueue.Enqueue($"{EmailIcons.Info} Reply: your mining status", stats); // fire-and-forget; delivered by the EmailQueue background worker.
+            EmailQueue.Enqueue("Reply: your mining status", stats); // fire-and-forget; delivered by the EmailQueue background worker.
             return Task.CompletedTask;
         }
  
@@ -208,7 +219,7 @@ namespace p2poolmail
         private static async Task PollWorkersLoop()
         {
             
-            while (!CancellationTokenSource.IsCancellationRequested)
+            while (!_shutdownCts.IsCancellationRequested)
             {
                 try
                 {
@@ -221,7 +232,7 @@ namespace p2poolmail
 
                 try
                 {
-                    await Task.Delay(TimeSpan.FromSeconds(5), CancellationTokenSource.Token);
+                    await Task.Delay(TimeSpan.FromSeconds(5), _shutdownCts.Token);
                 }
                 catch (OperationCanceledException)
                 {
@@ -236,10 +247,10 @@ namespace p2poolmail
             try
             {
                 var tailer = new FileTailer(Settings.Current.p2pool_log.file_path);
-                await tailer.RunAsync(CancellationTokenSource.Token);
+                await tailer.RunAsync(_shutdownCts.Token);
                 return 0;
             }
-            catch (OperationCanceledException) when (CancellationTokenSource.IsCancellationRequested)
+            catch (OperationCanceledException) when (_shutdownCts.IsCancellationRequested)
             {
                 return 0; // graceful exit triggered by Ctrl+C.
             }
@@ -291,7 +302,7 @@ namespace p2poolmail
         {
             e.Cancel = true; // Suppress the default termination and shut down cooperatively instead.
             CommonHelper.WriteLine("Ctrl+C received - shutting down...");
-            CancellationTokenSource.Cancel();
+            _shutdownCts.Cancel();
         }
     }
 }
