@@ -63,7 +63,7 @@ namespace p2poolmail
         public static string StratumTxtFormat()
         {
             var msg = new StringBuilder();
-            msg.Append(EmailIcons.Stats).Append($" Hi,Instruction received at {DateTime.Now:HH:mm:ss}.").Append("\r\n");
+            msg.Append(EmailIcons.Info).Append($" Hi,Instruction received at {DateTime.Now:HH:mm:ss}.").Append("\r\n");
             var stream = LoadLocalStratum();
             if (stream is null) return string.Empty;
 
@@ -88,7 +88,7 @@ namespace p2poolmail
                     workerAddress = workerAddress[..separatorIndex];
 
                 long.TryParse(field[3], out var workHash);
-                long.TryParse(field[2], out var uptime);
+                long.TryParse(field[1], out var uptime);
                 TimeSpan ts = TimeSpan.FromSeconds(uptime);
 
                 msg.Append(field[4]).Append("     "); // name
