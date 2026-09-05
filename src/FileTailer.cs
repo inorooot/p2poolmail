@@ -132,7 +132,7 @@ internal sealed class FileTailer : IDisposable
 
         // Return the pooled line buffer and release the wake-up signal.
         ArrayPool<char>.Shared.Return(_lineBuffer);
-        _lineBuffer = Array.Empty<char>();
+        _lineBuffer = null!;  
         _signal.Dispose();
     }
 
