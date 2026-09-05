@@ -83,10 +83,23 @@ time_of_day = "18:00"                     # Local time for the report (HH:mm)
 frequency_hours = 24                      # No changes required
 ```
 
+## Redundant monitoring
+
+There are failure cases in which p2poolmail is helpless: if the whole machine freezes, shuts down, or your network goes down, it can't send you an email.
+
+For that second level of redundancy, enable `[keepalive].enable_remote_ping`: p2poolmail will ping a remote watchdog service (e.g. [HealthChecks.io](https://healthchecks.io)) every `interval_minutes`. If the pings stop arriving, the service notifies you through its own channels (email, Pushover, Slack, Discord, etc.).
+
+```toml
+[keepalive]
+enable_remote_ping = true
+interval_minutes = 10
+ping_url = "https://hc-ping.com/<your-uuid>"
+```
+
 ### Security notes
 
 - **Use a dedicated email account for p2poolmail.** It's best to create a brand-new mailbox just for the SMTP and IMAP services in this app, instead of reusing your personal email. This keeps your main inbox and credentials isolated: if anything leaks or gets misconfigured, only this throwaway account is affected.
- 
+
 ## Build
 
 p2poolmail is a .NET 10 console application and is published as a self-contained native binary (Native AOT).
