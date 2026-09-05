@@ -8,8 +8,6 @@ namespace p2poolmail;
 
 internal sealed class EmailQueue : IAsyncDisposable
 {
-    public enum SendResult { Sent, Failed, Dropped, NotInitialized }
-
     private const int WarnPending = 256;
     private const int MaxPending = 1024;
     /// <summary>Maximum delivery attempts per email (including the first). Reduced from 8 to lower connection churn during SMTP outages.</summary>
@@ -90,36 +88,7 @@ internal sealed class EmailQueue : IAsyncDisposable
         q.Write(new MailJob(q.Create(subject, body, correlationId, isHtml), null, correlationId));
     }
 
-    /// <summary>
-    /// Asynchronous variant of Enqueue: awaits delivery without blocking any thread.
-    /// </summary>
-    public static async Task<SendResult> SendAsync(string subject, string body, string? correlationId = null, bool isHtml = false)
-    {
-        var q = Volatile.Read(ref _instance);
-        if (q is null || Volatile.Read(ref q._stopping) != 0)
-        {
-            CommonHelper.WriteWarn($"EmailQueue not initialized, cannot send: {subject}");
-            return SendResult.NotInitialized;
-        }
-
-        var done = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        q.Write(new MailJob(q.Create(subject, body, correlationId, isHtml), done, correlationId));
-        try
-        {
-            return await done.Task.ConfigureAwait(false) ? SendResult.Sent : SendResult.Failed;
-        }
-        catch (OperationCanceledException)
-        {
-            return SendResult.Dropped;
-        }
-        catch (Exception ex)
-        {
-            CommonHelper.WriteError($"EmailQueue.Send failed: {ex.Message}");
-            return SendResult.Failed;
-        }
-    }
-
-    public static async Task ShutdownAsync(TimeSpan drainTimeout)
+        public static async Task ShutdownAsync(TimeSpan drainTimeout)
     {
         var q = Interlocked.Exchange(ref _instance, null);
         if (q is not null)

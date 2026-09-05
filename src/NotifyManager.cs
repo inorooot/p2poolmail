@@ -271,13 +271,7 @@ internal static class NotifyManager
                 }
             }
         }
-    }
-
-    public static void DailyStats()
-    {
-        LocalStratum.StratumTxtFormat();
-
-    }
+        }
 
     // ---------- Daily stats: scheduled mining summary report ([daily_stats] in Config.toml) ----------
 

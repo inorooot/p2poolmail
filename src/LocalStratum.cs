@@ -1,4 +1,3 @@
-using System.Net;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -37,14 +36,6 @@ namespace p2poolmail
     {
         public static string[] SplitFields(string value, char separator = ',')
             => (value ?? string.Empty).Split(separator, StringSplitOptions.TrimEntries);
-
-        public static string LastUpdateTime(string filePath)
-        {
-            var lastWriteTime = File.GetLastWriteTime(filePath);
-            if ((DateTime.Now - lastWriteTime).TotalSeconds > 30)
-                return "Stale data detected. P2Pool may not be updating data normally.\r\n";
-            return "";
-        }
 
         private static local_Stratum? LoadLocalStratum()
         {
