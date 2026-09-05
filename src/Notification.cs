@@ -68,6 +68,9 @@ internal static class Notification
     public static readonly string[] Keywords;
     private static readonly bool[] Enabled;
     private static readonly Slot[] Slots = new Slot[Catalog.Length];
+    // One lock per slot to protect concurrent access to mutable Slot state.
+    // Different notification types can be updated concurrently without contention.
+    private static readonly object[] SlotLocks = new object[Catalog.Length];
 
     static Notification()
     {
@@ -79,6 +82,7 @@ internal static class Notification
                 throw new InvalidOperationException($"Notification.Catalog[{i}] must be declared in Type order.");
             Keywords[i] = Catalog[i].Keyword;
             Enabled[i] = true;
+            SlotLocks[i] = new object();
         }
     }
 
@@ -102,40 +106,43 @@ internal static class Notification
     /// restarted FROM THE CURRENT LINE and after MaxFailedBursts consecutive slow
     /// bursts the fault is latched anyway — a persistent low-rate fault must not
     /// stay silent forever.
+    /// Thread-safe: uses per-slot locking to prevent lost updates from concurrent log lines.
     /// </summary>
     public static void ObserveAlert(Type type, long utcNow)
     {
         var i = (int)type;
-        ref var slot = ref Slots[i];
-        slot.SeenCount++;
-
-        // Already latched: just extend the recovery deadline.
-        if (slot.IsFault)
+        lock (SlotLocks[i])
         {
+            ref var slot = ref Slots[i];
+            slot.SeenCount++;
+
+            // Already latched: just extend the recovery deadline.
+            if (slot.IsFault)
+            {
+                slot.LastSeen = utcNow;
+                return;
+            }
+
+            if (slot.FirstSeen == 0)
+                slot.FirstSeen = utcNow;
             slot.LastSeen = utcNow;
-            return;
-        }
 
-        if (slot.FirstSeen == 0)
-            slot.FirstSeen = utcNow;
-        slot.LastSeen = utcNow;
-
-        // Fast path: dense burst inside the window confirms a real fault.
-        if (slot.SeenCount >= AlertBurstCount && utcNow - slot.FirstSeen <= AlertWindowSeconds)
-        {
-            Latch(i, ref slot);
-            return;
-        }
-
-        if (utcNow - slot.FirstSeen > AlertWindowSeconds)
-        {
-             
-            slot.FailedBursts++;
-            slot.FirstSeen = utcNow;
-            slot.SeenCount = 1;
-
-            if (slot.FailedBursts >= MaxFailedBursts)
+            // Fast path: dense burst inside the window confirms a real fault.
+            if (slot.SeenCount >= AlertBurstCount && utcNow - slot.FirstSeen <= AlertWindowSeconds)
+            {
                 Latch(i, ref slot);
+                return;
+            }
+
+            if (utcNow - slot.FirstSeen > AlertWindowSeconds)
+            {
+                slot.FailedBursts++;
+                slot.FirstSeen = utcNow;
+                slot.SeenCount = 1;
+
+                if (slot.FailedBursts >= MaxFailedBursts)
+                    Latch(i, ref slot);
+            }
         }
     }
 
@@ -149,20 +156,24 @@ internal static class Notification
     /// <summary>
     /// Called on every observed log line: a latched fault unseen for more than
     /// RecoveryWindowSeconds is considered recovered and sends one recovery email.
+    /// Thread-safe: uses per-slot locking to prevent races with ObserveAlert.
     /// </summary>
     public static void TryResume(long utcNow)
     {
         for (var i = 0; i < Catalog.Length; i++)
         {
-            ref var slot = ref Slots[i];
-            if (!slot.IsFault || !Enabled[i] || utcNow - slot.LastSeen <= RecoveryWindowSeconds)
-                continue;
+            lock (SlotLocks[i])
+            {
+                ref var slot = ref Slots[i];
+                if (!slot.IsFault || !Enabled[i] || utcNow - slot.LastSeen <= RecoveryWindowSeconds)
+                    continue;
 
-            slot.Reset();
-            EmailQueue.Enqueue(
-                EmailTemplates.RecoverySubject,
-                $"{EmailIcons.Ok} No recurrence of \"{Catalog[i].Subject}\". Condition may have cleared.",
-                $"recoverid:{i}");
+                slot.Reset();
+                EmailQueue.Enqueue(
+                    EmailTemplates.RecoverySubject,
+                    $"{EmailIcons.Ok} No recurrence of \"{Catalog[i].Subject}\". Condition may have cleared.",
+                    $"recoverid:{i}");
+            }
         }
     }
 }
