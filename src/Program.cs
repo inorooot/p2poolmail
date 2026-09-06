@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using MimeKit;
 
 namespace p2poolmail
@@ -12,6 +13,7 @@ namespace p2poolmail
         private static async Task<int> Main(string[] args)
         {
             Console.CancelKeyPress += OnCancelRequested;
+            SuppressCtrlCEcho();
 
             CommonHelper.WriteLine($"p2poolmail v{AppVersion.Value} starting...");
 
@@ -49,6 +51,7 @@ namespace p2poolmail
             }
             finally
             {
+                RestoreCtrlCEcho();
                 instanceLock.Dispose();
             }
         }
@@ -279,8 +282,63 @@ namespace p2poolmail
         }
 
          
+        /// <summary>0 = shutdown not yet requested; 1 = a Ctrl+C was already handled.</summary>
+        private static int _shutdownRequested;
+
+        /// <summary>True while we own a temporary "stty -echoctl" on the controlling terminal.</summary>
+        private static bool _ctrlEchoSuppressed;
+
+        /// <summary>
+        /// The '^C' shown when Ctrl+C is pressed is echoed by the terminal driver itself
+        /// (termios ECHOCTL), not by this program, so it can land mid-line next to our
+        /// log output. Disable it on interactive Unix terminals and restore on exit.
+        /// </summary>
+        private static void SuppressCtrlCEcho()
+        {
+            if (!(OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())) return;
+            if (Console.IsInputRedirected) return; // no tty (e.g. systemd): nothing to suppress
+
+            try
+            {
+                // stty acts on the terminal it inherits via stdin, which is the
+                // controlling terminal here because input is not redirected.
+                using var stty = Process.Start(new ProcessStartInfo("stty", "-echoctl"));
+                stty?.WaitForExit(1000);
+                _ctrlEchoSuppressed = stty is { HasExited: true, ExitCode: 0 };
+            }
+            catch
+            {
+                // Purely cosmetic; never block startup over it.
+            }
+        }
+
+        private static void RestoreCtrlCEcho()
+        {
+            if (!_ctrlEchoSuppressed) return;
+            _ctrlEchoSuppressed = false;
+
+            try
+            {
+                using var stty = Process.Start(new ProcessStartInfo("stty", "echoctl"));
+                stty?.WaitForExit(1000);
+            }
+            catch
+            {
+                // Best effort - the terminal is typically gone anyway at this point.
+            }
+        }
+
         private static void OnCancelRequested(object? sender, ConsoleCancelEventArgs e)
         {
+            if (Interlocked.Exchange(ref _shutdownRequested, 1) != 0)
+            {
+                // Second Ctrl+C: graceful shutdown is apparently stuck (e.g. SMTP
+                // drain or IMAP disconnect hung), so let the OS terminate us.
+                CommonHelper.WriteLine("Second Ctrl+C received - forcing termination.");
+                e.Cancel = false;
+                return;
+            }
+
             e.Cancel = true; // Suppress the default termination and shut down cooperatively instead.
             CommonHelper.WriteLine("Ctrl+C received - shutting down...");
             _shutdownCts.Cancel();
