@@ -54,9 +54,13 @@ namespace p2poolmail
         public static string StratumTxtFormat()
         {
             var msg = new StringBuilder();
-            msg.Append(EmailIcons.Info).Append($" Hi,Instruction received at {DateTime.Now:HH:mm:ss}.").Append("\r\n");
+            msg.Append(EmailIcons.Info).Append($" Hi, Instruction received at {DateTime.Now:HH:mm:ss}.").Append("\r\n");
             var stream = LoadLocalStratum();
-            if (stream is null) return string.Empty;
+            if (stream is null)
+            {
+                msg.Append(EmailIcons.Alert).Append(" Unable to read mining data. P2Pool may not be running.").Append("\r\n");
+                return msg.ToString();
+            }
 
             AppendStratumSummary(msg, stream);
 
@@ -94,7 +98,11 @@ namespace p2poolmail
         {
             var msg = new StringBuilder();
             var stream = LoadLocalStratum();
-            if (stream is null) return string.Empty;
+            if (stream is null)
+            {
+                msg.Append(EmailIcons.Alert).Append(" No mining data available.");
+                return msg.ToString();
+            }
 
             AppendStratumSummary(msg, stream);
             return msg.ToString();
