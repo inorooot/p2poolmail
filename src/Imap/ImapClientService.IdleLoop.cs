@@ -28,9 +28,20 @@ namespace p2poolmail
                 }
                 catch (Exception ex)
                 {
-                    // No backoff by design: this program retries immediately.
+                    // A fast-failing connect (e.g. connection refused) surfaces as a
+                    // plain socket exception, never as OperationCanceledException, so
+                    // without this check the retry loop would spin forever even after
+                    // cancellation (observed blocking shutdown). Honor it explicitly.
+                    if (cancellationToken.IsCancellationRequested)
+                        throw new OperationCanceledException(cancellationToken);
+
                     attempts++;
                     _logger?.Invoke($"IMAP connect failed: {ex.Message} - retrying (attempt #{attempts})");
+
+                    // Retry once per second (previously immediate retry, which spun at
+                    // ~5000 attempts/s and flooded the log). Task.Delay also exits the
+                    // loop promptly when cancellation is requested mid-wait.
+                    await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken).ConfigureAwait(false);
                 }
             }
 

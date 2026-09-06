@@ -91,11 +91,14 @@ namespace p2poolmail
             EmailQueue.Initialize();
 
             // IMAP listener for new mail (auxiliary feature). Only started when enabled;
-            // a failure must not stop the main flow.
-            // Note: imapService must be declared here (not inside the if) because ShutdownAsync uses it below.
-            var imapService = Settings.Current.imap_server.enable
-                ? await TryStartImapServiceAsync()
-                : null;
+            // startup runs on a background task so a connect failure (bad password,
+            // unreachable server - InitializeAsync retries forever by design) must not
+            // stop or delay the main flow. Note: imapService/imapInitTask must be
+            // declared here (not inside the if) because ShutdownAsync uses them below.
+            ImapClientService? imapService = null;
+            Task? imapInitTask = null;
+            if (Settings.Current.imap_server.enable)
+                (imapService, imapInitTask) = StartImapServiceInBackground();
 
             // Miner Tracker: report online worker count every 5 seconds (fire-and-forget; the loop handles its own exceptions).
             if (Settings.Current.notify_event.worker_down_up)
@@ -135,17 +138,20 @@ namespace p2poolmail
             // Tailing p2pool.log is the primary task; block here until cancelled or failed.
            
             var exitCode = await RunTailerAsync();
-            await ShutdownAsync(imapService);
+            await ShutdownAsync(imapService, imapInitTask);
             return exitCode;
         }
 
-        /// <summary>Starts the IMAP IDLE listener; returns the service instance, or null on failure.</summary>
-        private static async Task<ImapClientService?> TryStartImapServiceAsync()
+        /// <summary>
+        /// Starts the IMAP IDLE listener on a background task and returns the service
+        /// instance plus the startup task. Construction is synchronous (no I/O), so the
+        /// instance is available immediately for ShutdownAsync. InitializeAsync retries
+        /// internally until the connection succeeds and only throws on cancellation, so
+        /// the background task never lets a connect failure escape or block the caller.
+        /// </summary>
+        private static (ImapClientService service, Task initTask) StartImapServiceInBackground()
         {
             var cfg = Settings.Current.imap_server;
-            if (!cfg.enable)
-                return null;
-
             var imapService = new ImapClientService(
                 cfg.host,
                 cfg.port,
@@ -155,19 +161,25 @@ namespace p2poolmail
                 msg => CommonHelper.WriteLine(msg),
                 ignoreCertificateErrors: false);
 
-            try
+            var initTask = Task.Run(async () =>
             {
-                // InitializeAsync retries until connected; it only returns on
-                // success or throws when cancelled.
-                await imapService.InitializeAsync(OnNewMailAsync, _shutdownCts.Token);
-                return imapService;
-            }
-            catch (Exception ex)
-            {
-                CommonHelper.WriteError($"IMAP check failed: {ex}");
-                imapService.Dispose();
-                return null;
-            }
+                try
+                {
+                    await imapService.InitializeAsync(OnNewMailAsync, _shutdownCts.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (_shutdownCts.IsCancellationRequested)
+                {
+                    // Shutdown requested while (re)connecting - expected during exit.
+                }
+                catch (Exception ex)
+                {
+                    // Safety net: the IDLE loop keeps retrying connect failures on its
+                    // own, so anything landing here is unexpected - log and carry on.
+                    CommonHelper.WriteError($"IMAP startup failed: {ex}");
+                }
+            });
+
+            return (imapService, initTask);
         }
 
         /// <summary>
@@ -258,13 +270,37 @@ namespace p2poolmail
             }
         }
 
-        /// <summary>Unified shutdown: disconnect IMAP, then abort the mail queue without drain wait.</summary>
-        private static async Task ShutdownAsync(ImapClientService? imapService)
+        /// <summary>Unified shutdown: settle IMAP startup, disconnect IMAP, then abort the mail queue without drain wait.</summary>
+        private static async Task ShutdownAsync(ImapClientService? imapService, Task? imapInitTask = null)
         {
             CommonHelper.WriteLine("Shutting down...");
 
             if (imapService is not null)
             {
+                // Make the background connect/retry loop stop before we touch the
+                // client: cancel the shutdown token (no-op on the Ctrl+C path, but
+                // required when the tailer itself failed) and give the startup task a
+                // short grace period to observe it, so it cannot race a reconnect
+                // against Dispose below. The task swallows its own exceptions, so a
+                // completed await never throws.
+                _shutdownCts.Cancel();
+                if (imapInitTask is not null)
+                {
+                    try
+                    {
+                        await imapInitTask.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+                    }
+                    catch (TimeoutException)
+                    {
+                        // Startup loop still winding down (e.g. connect hung on a
+                        // black-holed host) - proceed with the disconnect anyway.
+                        CommonHelper.WriteWarn("IMAP startup task did not settle within 5s - disconnecting anyway.");
+                    }
+                    catch (OperationCanceledException)
+                    {
+                    }
+                }
+
                 try
                 {
                     await imapService.DisconnectAsync().ConfigureAwait(false);
